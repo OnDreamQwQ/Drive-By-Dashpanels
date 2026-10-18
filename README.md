@@ -68,4 +68,4 @@ WireNetworkManager#trySetSignalAt(...)      // 推到线上
 
 ## 协议
 
-[MIT](LICENSE)。Dashpanels、Drive By Wire、Create: Aeroworks 各自的内容归各自作者所有，MIT 不覆盖它们。
+[MIT](LICENSE)。Dashpanels、Drive By Wire 各自的内容归各自作者所有，MIT 不覆盖它们。
