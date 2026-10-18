@@ -2,6 +2,7 @@ package io.github.ondreamqwq.dbd.content;
 
 import edn.stratodonut.drivebywire.wire.WireNetworkManager;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,11 +36,20 @@ import net.minecraft.world.level.block.state.BlockState;
  * returns immediately on a client, so a client-side block entity never has a network to read. The
  * names therefore travel to the client through the vanilla block-entity update tag, which is what
  * makes {@code PanelLinkCenterBlock#wire$nextChannel} able to answer while the player scrolls.
+ *
+ * <p>Renaming a module is handled here as well. Dashpanels' {@code ModuleMap#rename} only moves the
+ * map key and keeps the same {@code Module} instance, so a rename is detectable by remembering which
+ * name each instance was last seen under. A cable connection remembers the channel string it was
+ * bound with, and that string is the OLD name after a rename, so the old name keeps being published
+ * with the module's current value -- the connection survives the rename and never has to be remade.
  */
 public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /** NBT key for the channel names inside the block-entity update tag. */
     public static final String TAG_CHANNELS = "dbd:channels";
+
+    /** NBT key for the rename aliases, so a rename survives a reload. */
+    public static final String TAG_ALIASES = "dbd:aliases";
 
     /** Values published on the previous tick, used to clear channels whose module went away. */
     private List<String> published = List.of();
@@ -47,13 +57,22 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     /** Channel names last pushed to clients, so the update tag is only resent when they change. */
     private List<String> synced = List.of();
 
+    /**
+     * Last name each module instance was seen under. {@code ModuleMap#rename} keeps the instance and
+     * only moves the key, so a changed name for the same instance is exactly a rename.
+     */
+    private final Map<Module, String> seenNames = new IdentityHashMap<>();
+
+    /** Old channel name -> the module name it now stands for. Persisted, so a rename outlives a reload. */
+    private final Map<String, String> aliases = new LinkedHashMap<>();
+
     public PanelLinkCenterBlockEntity(BlockPos pos, BlockState state) {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
     }
 
     /** The cable channels this center offers, one per module (and one per multi-input sub-key). */
     public List<String> channelNames() {
-        return List.copyOf(sample().keySet());
+        return List.copyOf(valuesOf(collect()).keySet());
     }
 
     /** Server-side view of the cable network this center joined, or {@code null} when it has none. */
@@ -67,7 +86,9 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         if (level.isClientSide) {
             return;
         }
-        Map<String, Integer> now = sample();
+        Map<String, Module> modules = collect();
+        trackRenames(modules);
+        Map<String, Integer> now = valuesOf(modules);
         List<String> names = List.copyOf(now.keySet());
         if (!names.equals(synced)) {
             synced = names;
@@ -88,6 +109,32 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         super.remove();
     }
 
+    // ------------------------------------------------------------------ rename tracking
+
+    /**
+     * Spot renames by module identity, and keep the alias table following a chain of renames.
+     *
+     * <p>An alias whose module vanished is dropped: the channel is then cleared by {@link #publish}.
+     */
+    private void trackRenames(Map<String, Module> modules) {
+        for (Map.Entry<String, Module> entry : modules.entrySet()) {
+            String name = entry.getKey();
+            String previous = seenNames.put(entry.getValue(), name);
+            if (previous == null || previous.equals(name)) {
+                continue;
+            }
+            // The instance kept its identity, only its name moved: every alias pointing at the old
+            // name now points at the new one, and the old name itself becomes an alias.
+            for (Map.Entry<String, String> alias : aliases.entrySet()) {
+                if (alias.getValue().equals(previous)) {
+                    alias.setValue(name);
+                }
+            }
+            aliases.put(previous, name);
+        }
+        aliases.entrySet().removeIf(alias -> !modules.containsKey(alias.getValue()));
+    }
+
     // ------------------------------------------------------------------ client sync
 
     @Override
@@ -106,9 +153,26 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         super.loadAdditional(tag, registries);
         List<String> names = readChannels(tag);
         synced = names;
+        aliases.clear();
+        if (tag.contains(TAG_ALIASES, Tag.TAG_COMPOUND)) {
+            CompoundTag stored = tag.getCompound(TAG_ALIASES);
+            for (String oldName : stored.getAllKeys()) {
+                aliases.put(oldName, stored.getString(oldName));
+            }
+        }
         if (level != null && level.isClientSide) {
             PanelLinkChannels.store(worldPosition, names);
         }
+    }
+
+    @Override
+    public void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
+        super.saveAdditional(tag, registries);
+        CompoundTag stored = new CompoundTag();
+        for (Map.Entry<String, String> alias : aliases.entrySet()) {
+            stored.putString(alias.getKey(), alias.getValue());
+        }
+        tag.put(TAG_ALIASES, stored);
     }
 
     private static List<String> readChannels(CompoundTag tag) {
@@ -130,19 +194,28 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         if (network == null) {
             return;
         }
+        // Old channel names stay fed with the current value, which is what keeps a cable bound
+        // before a rename working without the player touching it again.
+        Map<String, Integer> outgoing = new LinkedHashMap<>(now);
+        for (Map.Entry<String, String> alias : aliases.entrySet()) {
+            Integer value = now.get(alias.getValue());
+            if (value != null) {
+                outgoing.putIfAbsent(alias.getKey(), value);
+            }
+        }
         for (String stale : published) {
-            if (!now.containsKey(stale)) {
+            if (!outgoing.containsKey(stale)) {
                 WireNetworkManager.trySetSignalAt(level, pos, stale, 0);
             }
         }
-        for (Map.Entry<String, Integer> entry : now.entrySet()) {
+        for (Map.Entry<String, Integer> entry : outgoing.entrySet()) {
             WireNetworkManager.trySetSignalAt(level, pos, entry.getKey(), entry.getValue());
         }
-        published = List.copyOf(now.keySet());
+        published = List.copyOf(outgoing.keySet());
     }
 
     /**
-     * One pass over the network's live module map, producing channel name -> analog value.
+     * Merge every network member's live module map.
      *
      * <p>The merge is done here rather than through Dashpanels' helpers: {@code getCollectiveModules()}
      * is private, and the public {@code getCompiledModules()} is only a cache that
@@ -150,13 +223,12 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
      * advertised under its old name until something happened to recompile. Merging the members
      * directly is always current, which is what makes a rename show up on the next tick.
      */
-    private Map<String, Integer> sample() {
-        Map<String, Integer> values = new LinkedHashMap<>();
+    private Map<String, Module> collect() {
+        Map<String, Module> modules = new LinkedHashMap<>();
         ModulesNetwork network = getOrCreate();
         if (network == null) {
-            return values;
+            return modules;
         }
-        Map<String, Module> modules = new LinkedHashMap<>();
         for (ModulesNetworkMember member : network.members) {
             ModuleMap own = member.getModules();
             if (own == null) {
@@ -166,6 +238,11 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 modules.put(entry.getKey(), entry.getValue());
             }
         }
+        return modules;
+    }
+
+    private static Map<String, Integer> valuesOf(Map<String, Module> modules) {
+        Map<String, Integer> values = new LinkedHashMap<>();
         for (Map.Entry<String, Module> entry : modules.entrySet()) {
             String name = entry.getKey();
             Module module = entry.getValue();
