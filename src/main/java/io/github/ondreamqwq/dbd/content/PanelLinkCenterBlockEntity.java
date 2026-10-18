@@ -1,11 +1,16 @@
 package io.github.ondreamqwq.dbd.content;
 
 import edn.stratodonut.drivebywire.wire.WireNetworkManager;
+import edn.stratodonut.drivebywire.wire.graph.WireNetworkNode;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
 import io.github.ondreamqwq.dbd.DbdRegistry;
 import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.module.ModuleMap;
@@ -15,6 +20,7 @@ import moth.boxxed.panels.api.module.io.ModuleIOInfo;
 import moth.boxxed.panels.api.network.ModulesNetwork;
 import moth.boxxed.panels.api.network.ModulesNetworkMember;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -40,8 +46,11 @@ import net.minecraft.world.level.block.state.BlockState;
  * <p>Renaming a module is handled here as well. Dashpanels' {@code ModuleMap#rename} only moves the
  * map key and keeps the same {@code Module} instance, so a rename is detectable by remembering which
  * name each instance was last seen under. A cable connection remembers the channel string it was
- * bound with, and that string is the OLD name after a rename, so the old name keeps being published
- * with the module's current value -- the connection survives the rename and never has to be remade.
+ * bound with, and that string is the OLD name after a rename; the old name therefore keeps being
+ * published with the module's current value AND is offered back to the client as a selectable
+ * channel. Both halves matter: the first keeps an existing cable alive, the second keeps the channel
+ * list scrollable afterwards -- without it the wire would sit on a name that no longer appears in
+ * the list and {@code wire$nextChannel} would have no index to walk from.
  */
 public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
@@ -50,6 +59,13 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /** NBT key for the rename aliases, so a rename survives a reload. */
     public static final String TAG_ALIASES = "dbd:aliases";
+
+    /**
+     * Upper bound on remembered rename aliases. A rename is never pruned just because its module is
+     * gone -- a module torn down and put back under its new name has to revive the old cable without
+     * a re-bind -- so the table is capped by age instead of by liveness.
+     */
+    private static final int MAX_ALIASES = 128;
 
     /** Values published on the previous tick, used to clear channels whose module went away. */
     private List<String> published = List.of();
@@ -70,9 +86,12 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
     }
 
-    /** The cable channels this center offers, one per module (and one per multi-input sub-key). */
+    /**
+     * The cable channels this center offers: one per module (one per multi-input sub-key), plus the
+     * old name of every renamed module so a cable bound before the rename stays selectable.
+     */
     public List<String> channelNames() {
-        return List.copyOf(valuesOf(collect()).keySet());
+        return channelList(valuesOf(collect()).keySet());
     }
 
     /** Server-side view of the cable network this center joined, or {@code null} when it has none. */
@@ -89,7 +108,7 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         Map<String, Module> modules = collect();
         trackRenames(modules);
         Map<String, Integer> now = valuesOf(modules);
-        List<String> names = List.copyOf(now.keySet());
+        List<String> names = channelList(now.keySet());
         if (!names.equals(synced)) {
             synced = names;
             level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
@@ -101,8 +120,15 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     public void remove() {
         Level level = getLevel();
         if (level != null && !level.isClientSide) {
-            for (String channel : published) {
-                WireNetworkManager.trySetSignalAt(level, getBlockPos(), channel, 0);
+            BlockPos pos = getBlockPos();
+            if (WireNetworkManager.get(level) != null) {
+                for (String channel : published) {
+                    WireNetworkManager.trySetSignalAt(level, pos, channel, 0);
+                }
+                // The block is gone, so every cable that left it is garbage. Drive By Wire keeps
+                // those links in its own state with no "drop everything from this source" call, so
+                // they are dropped one sink at a time.
+                removeConnections(level, pos, channel -> true);
             }
             published = List.of();
         }
@@ -113,8 +139,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /**
      * Spot renames by module identity, and keep the alias table following a chain of renames.
-     *
-     * <p>An alias whose module vanished is dropped: the channel is then cleared by {@link #publish}.
      */
     private void trackRenames(Map<String, Module> modules) {
         for (Map.Entry<String, Module> entry : modules.entrySet()) {
@@ -132,19 +156,59 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             }
             aliases.put(previous, name);
         }
-        // A module that no longer exists cannot feed its old channel any more, so its alias goes and
-        // the channel is cleared by publish(). Pruning waits for a non-empty merge, because a module
-        // broken off (or a cable pulled) would otherwise throw away rename history that is still
-        // needed once it comes back.
-        if (modules.isEmpty()) {
-            return;
-        }
-        aliases.entrySet().removeIf(alias -> !modules.containsKey(alias.getValue()));
+        // A module that disappears cannot feed its old channel any more, so publish() writes 0 to it
+        // and the cable goes quiet. The alias record is deliberately KEPT: tearing a module down and
+        // later putting a new one back under the renamed target has to revive the cable without a
+        // re-bind, and pruning here was exactly what broke that. Only the instance bookkeeping is
+        // dropped, so a destroyed module does not linger in memory.
         IdentityHashMap<Module, Boolean> alive = new IdentityHashMap<>();
         for (Module module : modules.values()) {
             alive.put(module, Boolean.TRUE);
         }
         seenNames.keySet().retainAll(alive.keySet());
+        trimAliases();
+    }
+
+    /** Cap the alias table by age; entries are insertion ordered, so the oldest go first. */
+    private void trimAliases() {
+        Iterator<String> oldest = aliases.keySet().iterator();
+        while (aliases.size() > MAX_ALIASES && oldest.hasNext()) {
+            oldest.next();
+            oldest.remove();
+        }
+    }
+
+    /** Forget every rename alias. Returns how many were dropped. */
+    public int clearAliases() {
+        int count = aliases.size();
+        aliases.clear();
+        return count;
+    }
+
+    /**
+     * Drop the cable links of channels that no module feeds any more. Called when the player asks
+     * for it explicitly: doing this automatically would delete real wiring every time a chunk with
+     * the panels unloads and the network looks momentarily empty.
+     *
+     * @return how many links were removed
+     */
+    public int dropDanglingConnections() {
+        Level level = getLevel();
+        if (level == null || level.isClientSide) {
+            return 0;
+        }
+        Map<String, Integer> live = valuesOf(collect());
+        int[] removed = {0};
+        removeConnections(level, getBlockPos(), channel -> !live.containsKey(channel) && !feeds(live, channel), removed);
+        synced = List.of();
+        level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
+        return removed[0];
+    }
+
+    /** Whether {@code channel} is still fed, either directly or through a rename alias. */
+    private boolean feeds(Map<String, Integer> live, String channel) {
+        String target = aliases.get(channel);
+        return target != null && live.containsKey(target);
     }
 
     // ------------------------------------------------------------------ client sync
@@ -224,6 +288,57 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             WireNetworkManager.trySetSignalAt(level, pos, entry.getKey(), entry.getValue());
         }
         published = List.copyOf(outgoing.keySet());
+    }
+
+    /**
+     * Live channel names first, then any renamed-away name, so a cable that was bound before a
+     * rename still finds itself in the list that {@code wire$nextChannel} walks.
+     */
+    private List<String> channelList(Collection<String> live) {
+        List<String> names = new ArrayList<>(live);
+        for (String alias : aliases.keySet()) {
+            if (!names.contains(alias)) {
+                names.add(alias);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /**
+     * Delete the cable links of this source whose channel passes {@code filter}.
+     *
+     * <p>Drive By Wire records a link as (source position, channel) -> sinks, and only exposes a
+     * per-link removal, so the sinks have to be read back out of {@code getNetwork()} first.
+     */
+    private void removeConnections(Level level, BlockPos source, Predicate<String> filter) {
+        removeConnections(level, source, filter, new int[1]);
+    }
+
+    private void removeConnections(Level level, BlockPos source, Predicate<String> filter, int[] removed) {
+        WireNetworkManager network = WireNetworkManager.get(level);
+        if (network == null) {
+            return;
+        }
+        Map<String, Set<WireNetworkNode.WireNetworkSink>> perChannel = network.getNetwork().get(source.asLong());
+        if (perChannel == null) {
+            return;
+        }
+        for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> entry : perChannel.entrySet()) {
+            if (!filter.test(entry.getKey())) {
+                continue;
+            }
+            for (WireNetworkNode.WireNetworkSink sink : List.copyOf(entry.getValue())) {
+                int facing = sink.direction();
+                if (facing < 0 || facing >= Direction.values().length) {
+                    continue;
+                }
+                if (WireNetworkManager.removeConnection(
+                        level, source, BlockPos.of(sink.position()),
+                        Direction.from3DDataValue(facing), entry.getKey())) {
+                    removed[0]++;
+                }
+            }
+        }
     }
 
     /**

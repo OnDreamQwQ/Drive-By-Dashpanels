@@ -17,6 +17,18 @@
 
 右键「面板链接中心」（空手）会在聊天栏列出它当前看到的所有频道，用来确认它到底读到了什么。
 
+**潜行右键**：清理。会删掉改名留下的记录，并移除那些「频道背后已经没有模块」的线缆连接，然后报出清理了多少条。
+
+## 改名怎么办
+
+**不用重连。** 在面板里把模块改名之后：
+
+- 之前已经绑到这根线缆上的连接**继续有效**，信号跟着新名字走。
+- 旧名字**仍然留在频道列表里**，所以滚轮依旧能正常切频道，不会卡在一个查不到的名字上。
+- 把模块拆掉再放回来、并且改用改名后的名字，连接也会自动恢复（所以拆除时不要用潜行右键清理）。
+
+改名记录存在方块实体里，重新加载区块/重启都不会丢；最多记 128 条，超出后按最旧的先丢。
+
 ## 依赖
 
 | 依赖 | 版本 | 必需 |
@@ -54,17 +66,22 @@ DBW 选频道时调用的是 `MultiChannelWireSource#wire$nextChannel`，而它�
 
 ```java
 ModulesNetworkMember#getOrCreate()          // 加入 Dashpanels 的网络
-ModulesNetwork#getCompiledModules()         // 拿到整条线缆上的模块
+ModulesNetwork#members / #getModules()      // 遍历成员自己的模块表
 ModuleMap#asEntryList()                     // 遍历模块
 IInput#getAnalog() / IMultiInput#getValues  // 读值
 WireNetworkManager#trySetSignalAt(...)      // 推到线上
+WireNetworkManager#getNetwork() / #removeConnection(...)  // 清理失效的线缆连接
 ```
+
+模块名是**服务端**算出来的（`ModulesNetworkManager#handleAddingMember` 在客户端直接 return，客户端的网络表是空的），通过方块实体的 update tag 送到客户端。
+
+清理失效连接时要注意：DBW 把连接记成「源坐标 + 频道 → 一堆 sink」，没有「按源整体删除」的接口，只能先用 `getNetwork()` 把 sink 读出来再逐条 `removeConnection`。这件事**故意不自动做** —— 面板所在区块卸载时网络会短暂变空，自动清理会把玩家真实的接线删掉。
 
 ## 已知限制
 
-- **频道列表在客户端读取**，依赖客户端侧的 `ModulesNetwork.compiledModules` 是否已经被填充。如果为空，滚轮只会显示「世界」，功能等于没用。这一点必须进游戏实测。
 - 一个模块一个频道，目前没有「一个方块同时输出多个模块」的合并方块。
 - 方块模型直接借用了 Dashpanels 面板链接器的模型与贴图（`control_link`），只是改了命名空间引用。
+- 改名记录是按「同一个 `Module` 实例换了名字」识别的。所以先把模块**拆掉**、再放一个全新的同名模块，会被当成「没有改名」，不会继承旧名字的频道。
 
 ## 协议
 

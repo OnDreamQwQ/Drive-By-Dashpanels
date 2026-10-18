@@ -129,21 +129,36 @@ public class PanelLinkCenterBlock extends ModulesNetworkMemberBlock implements e
         return PanelLinkChannels.next(current, forward);
     }
 
+    /** How many channel names the right-click report prints before it stops listing them. */
+    private static final int REPORT_LIMIT = 8;
+
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
                                                BlockHitResult hitResult) {
-        if (!level.isClientSide && level.getBlockEntity(pos) instanceof PanelLinkCenterBlockEntity center) {
-            String text;
-            if (center.network() == null) {
-                text = "面板链接中心：没有接入 Dashpanels 网络（四周要有线缆或面板，且必须水平相邻）";
-            } else {
-                List<String> names = center.channelNames();
-                text = names.isEmpty()
-                        ? "面板链接中心：已接入网络，但网络里没有可读取的模块"
-                        : "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", names);
-            }
-            player.displayClientMessage(Component.literal(text), false);
+        if (level.isClientSide || !(level.getBlockEntity(pos) instanceof PanelLinkCenterBlockEntity center)) {
+            return InteractionResult.SUCCESS;
         }
+        String text;
+        if (player.isShiftKeyDown()) {
+            // Sneaking drops the bookkeeping a rename left behind, plus any cable link whose channel
+            // no longer has a module behind it. Doing this automatically instead would delete real
+            // wiring whenever a chunk with the panels unloads and the network looks empty for a tick.
+            int aliases = center.clearAliases();
+            int links = center.dropDanglingConnections();
+            text = "面板链接中心：已清理 " + aliases + " 条改名记录、" + links + " 条失效连接";
+        } else if (center.network() == null) {
+            text = "面板链接中心：没有接入 Dashpanels 网络（四周要有线缆或面板，且必须水平相邻）";
+        } else {
+            List<String> names = center.channelNames();
+            if (names.isEmpty()) {
+                text = "面板链接中心：已接入网络，但网络里没有可读取的模块";
+            } else {
+                List<String> shown = names.size() > REPORT_LIMIT ? names.subList(0, REPORT_LIMIT) : names;
+                text = "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", shown)
+                        + (names.size() > REPORT_LIMIT ? " ..." : "");
+            }
+        }
+        player.displayClientMessage(Component.literal(text), false);
         return InteractionResult.SUCCESS;
     }
 }
