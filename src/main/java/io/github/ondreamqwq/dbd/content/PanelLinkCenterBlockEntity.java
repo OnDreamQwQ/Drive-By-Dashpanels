@@ -323,7 +323,8 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         if (perChannel == null) {
             return;
         }
-        for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> entry : perChannel.entrySet()) {
+        // Removing a link mutates the map we are walking, so take a copy of the entries first.
+        for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> entry : List.copyOf(perChannel.entrySet())) {
             if (!filter.test(entry.getKey())) {
                 continue;
             }
