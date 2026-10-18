@@ -132,7 +132,19 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             }
             aliases.put(previous, name);
         }
+        // A module that no longer exists cannot feed its old channel any more, so its alias goes and
+        // the channel is cleared by publish(). Pruning waits for a non-empty merge, because a module
+        // broken off (or a cable pulled) would otherwise throw away rename history that is still
+        // needed once it comes back.
+        if (modules.isEmpty()) {
+            return;
+        }
         aliases.entrySet().removeIf(alias -> !modules.containsKey(alias.getValue()));
+        IdentityHashMap<Module, Boolean> alive = new IdentityHashMap<>();
+        for (Module module : modules.values()) {
+            alive.put(module, Boolean.TRUE);
+        }
+        seenNames.keySet().retainAll(alive.keySet());
     }
 
     // ------------------------------------------------------------------ client sync
