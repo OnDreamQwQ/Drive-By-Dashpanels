@@ -133,10 +133,15 @@ public class PanelLinkCenterBlock extends ModulesNetworkMemberBlock implements e
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
                                                BlockHitResult hitResult) {
         if (!level.isClientSide && level.getBlockEntity(pos) instanceof PanelLinkCenterBlockEntity center) {
-            List<String> names = center.channelNames();
-            String text = names.isEmpty()
-                    ? "面板链接中心：没有找到模块（先把它接到面板所在的线缆网络）"
-                    : "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", names);
+            String text;
+            if (center.network() == null) {
+                text = "面板链接中心：没有接入 Dashpanels 网络（四周要有线缆或面板，且必须水平相邻）";
+            } else {
+                List<String> names = center.channelNames();
+                text = names.isEmpty()
+                        ? "面板链接中心：已接入网络，但网络里没有可读取的模块"
+                        : "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", names);
+            }
             player.displayClientMessage(Component.literal(text), false);
         }
         return InteractionResult.SUCCESS;

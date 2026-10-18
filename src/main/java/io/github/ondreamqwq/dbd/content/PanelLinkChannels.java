@@ -1,29 +1,29 @@
 package io.github.ondreamqwq.dbd.content;
 
 import java.util.List;
-import net.minecraft.client.Minecraft;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.entity.BlockEntity;
 
 /**
- * The wire-channel names that the block under the crosshair currently offers.
+ * The wire-channel names of the block the player is currently wiring.
  *
- * <p>{@code drivebywire} picks a channel through {@code MultiChannelWireSource#wire$nextChannel},
- * and it calls that on the {@link net.minecraft.world.level.block.Block} instance - which carries
- * no position, so it cannot know what modules the center is bound to. The only place the rest of
- * the chain ever sees both the block and its position is
- * {@code ClientWireNetworkHandler#changeChannel(Block, boolean)}, which reads a static
- * {@code selectedSource} field. A one-method mixin into that call copies the channel list out of
- * the block entity before the scroll is applied, and the block then answers from this stash.
+ * <p>{@code drivebywire} asks a {@link net.minecraft.world.level.block.Block} which channel comes
+ * next, and a block is a singleton with no position, so it cannot look the modules up itself. The
+ * names arrive from the server through the block-entity update tag and are stashed here, keyed by
+ * position; {@link #refresh(BlockPos)} selects the entry for the source the player just clicked.
  *
- * <p>Empty means "not a panel link center", and the caller falls back to the world channel.
+ * <p>Empty means "no names known yet", and the caller falls back to the world channel.
  */
 public final class PanelLinkChannels {
 
     /** Fallback channel id used by drivebywire for "no channel selected". */
     public static final String WORLD = "world";
 
+    /** Names per block position, pushed by {@code PanelLinkCenterBlockEntity#getUpdateTag}. */
+    private static final Map<BlockPos, List<String>> BY_POS = new ConcurrentHashMap<>();
+
+    /** Names of the block picked by the last {@link #refresh(BlockPos)}. */
     private static volatile List<String> channels = List.of();
 
     private PanelLinkChannels() {
@@ -33,17 +33,25 @@ public final class PanelLinkChannels {
         return channels;
     }
 
-    /** Reload the stash for the block at {@code pos}, or clear it when that is not a center. */
-    public static void refresh(BlockPos pos) {
-        Level level = Minecraft.getInstance().level;
-        if (pos == null || level == null) {
-            channels = List.of();
+    /** Remember the names the server reported for {@code pos} (client side only). */
+    public static void store(BlockPos pos, List<String> names) {
+        if (pos == null) {
             return;
         }
-        BlockEntity be = level.getBlockEntity(pos);
-        channels = be instanceof PanelLinkCenterBlockEntity center
-                ? List.copyOf(center.channelNames())
-                : List.of();
+        if (names == null || names.isEmpty()) {
+            BY_POS.remove(pos);
+        } else {
+            // Guard against a server that keeps relocating centers: the map would otherwise grow.
+            if (BY_POS.size() > 256) {
+                BY_POS.clear();
+            }
+            BY_POS.put(pos.immutable(), List.copyOf(names));
+        }
+    }
+
+    /** Select the names known for {@code pos}, or clear the stash when nothing is known. */
+    public static void refresh(BlockPos pos) {
+        channels = pos == null ? List.of() : BY_POS.getOrDefault(pos, List.of());
     }
 
     /** Mirrors the scroll behaviour of drivebywire's own multi-channel blocks. */
