@@ -1,0 +1,71 @@
+# Drive By Dashpanels
+
+把 **Dashpanels** 面板上的模块信号，送进 **Drive By Wire** 的线缆网络。
+
+一个方块解决问题：**面板链接中心**（`panel_link_center`）。把它接进面板所在的那条线缆网络，它就能看到网络上所有面板模块，然后每 tick 把每个模块的模拟值（0–15）推到线缆上。
+
+- **频道名 = 模块名**。面板上有多少模块，线缆上就有多少频道，没有数量上限。
+- 多路输入的模块会自动展开成 `模块名.子键`。
+- 滚轮选中时代显示的就是模块名本身 —— DBW 找不到对应翻译键时会原样显示频道字符串。
+
+## 怎么用
+
+1. 用线缆把「面板链接中心」和面板连到同一个网络。
+2. 手持**线缆**右键「面板链接中心」，滚轮选频道（列表里就是你的模块名）。
+3. 再右键目标方块，建立连接。
+4. 面板上的输入一动，线缆上的信号就跟着动。
+
+右键「面板链接中心」（空手）会在聊天栏列出它当前看到的所有频道，用来确认它到底读到了什么。
+
+## 依赖
+
+| 依赖 | 版本 | 必需 |
+| --- | --- | --- |
+| Minecraft | 1.21.1 | 是 |
+| NeoForge | 21.1+ | 是 |
+| Dashpanels | 2.0+ | 是 |
+| Drive By Wire | 0.3.0+ | 是 |
+
+## 从源码构建
+
+上面三个 mod 都不在公开 maven 仓库里，所以要先手动把它们放进 `libs/`（这几个 jar 不会进 git，也不该被再分发）：
+
+```
+libs/
+├── dashpanels-2.1+neoforge1.21.1.jar
+└── drivebywire-0.3.0.jar
+```
+
+然后：
+
+```bash
+./gradlew build
+```
+
+产物：`build/libs/Drive-By-Dashpanels-1.21.1-<版本>.jar`
+
+## 实现说明
+
+只有一个 mixin。
+
+DBW 选频道时调用的是 `MultiChannelWireSource#wire$nextChannel`，而它是拿 `Block` 实例调的 —— `Block` 是单例，**没有坐标**，所以它无法知道某个具体的链接中心绑到了哪些模块。整条链路里唯一同时掌握「方块 + 坐标」的地方是 `ClientWireNetworkHandler#changeChannel(Block, boolean)`，它自己读一个静态的 `selectedSource` 字段。所以就在这个方法的 HEAD 处把该坐标的频道列表抄到客户端暂存里，方块再从这个暂存回答。
+
+其余全部走公开 API：
+
+```java
+ModulesNetworkMember#getOrCreate()          // 加入 Dashpanels 的网络
+ModulesNetwork#getCompiledModules()         // 拿到整条线缆上的模块
+ModuleMap#asEntryList()                     // 遍历模块
+IInput#getAnalog() / IMultiInput#getValues  // 读值
+WireNetworkManager#trySetSignalAt(...)      // 推到线上
+```
+
+## 已知限制
+
+- **频道列表在客户端读取**，依赖客户端侧的 `ModulesNetwork.compiledModules` 是否已经被填充。如果为空，滚轮只会显示「世界」，功能等于没用。这一点必须进游戏实测。
+- 一个模块一个频道，目前没有「一个方块同时输出多个模块」的合并方块。
+- 方块模型直接借用了 Dashpanels 面板链接器的模型与贴图（`control_link`），只是改了命名空间引用。
+
+## 协议
+
+[MIT](LICENSE)。Dashpanels、Drive By Wire、Create: Aeroworks 各自的内容归各自作者所有，MIT 不覆盖它们。

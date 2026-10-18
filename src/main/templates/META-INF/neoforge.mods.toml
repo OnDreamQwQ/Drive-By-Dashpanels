@@ -1,0 +1,45 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''
+Reads every module on a Dashpanels cable network and republishes its analog value on the
+Drive By Wire wire network, one channel per module. Place, wire it to the panel, scroll a
+channel, done.
+'''
+
+[[mixins]]
+config = "dbd.mixins.json"
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "${neo_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "dashpanels"
+type = "required"
+versionRange = "[2.0,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "drivebywire"
+type = "required"
+versionRange = "[0.3.0,)"
+ordering = "AFTER"
+side = "BOTH"

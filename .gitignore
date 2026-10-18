@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+run/
+run-*/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+out/
+
+# Scratch
+*.log
+*.args
+build-log.txt
+
+# The three mods this project compiles against are NOT ours and are not
+# redistributable, so their jars are never committed. Drop them into libs/
+# yourself before building - see the README.
+libs/*.jar
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
