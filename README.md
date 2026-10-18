@@ -63,6 +63,12 @@ libs/
 
 [MIT](LICENSE)。Dashpanels、Drive By Wire 各自的内容归各自作者所有，MIT 不覆盖它们。
 
-##声明
+## 声明
 
 此项目代码由AI生成 ~~大肥鱼真是太好用了你知道吗~~
+
+## ToDo
+
+- 自己做一个模型
+- 添加选择ui
+- 线控对模块充能
