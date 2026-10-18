@@ -1,7 +1,9 @@
 package io.github.ondreamqwq.dbd;
 
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 
 /**
  * Drive By Dashpanels.
@@ -11,13 +13,16 @@ import net.neoforged.fml.common.Mod;
  * every panel module on that network. Each tick it pushes every module's analog value
  * into the Drive By Wire wire network under the module's own name, which means the
  * module names are the wire channels.
+ *
+ * <p>The rename/removal switches live in {@link DbdConfig} (`config/drive_by_dashpanels-common.toml`).
  */
 @Mod(DbdMod.MOD_ID)
 public final class DbdMod {
 
     public static final String MOD_ID = "drive_by_dashpanels";
 
-    public DbdMod(IEventBus modEventBus) {
+    public DbdMod(IEventBus modEventBus, ModContainer container) {
         DbdRegistry.register(modEventBus);
+        container.registerConfig(ModConfig.Type.COMMON, DbdConfig.SPEC);
     }
 }
