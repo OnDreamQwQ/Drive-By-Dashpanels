@@ -7,6 +7,7 @@ import com.mojang.math.Axis;
 import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import io.github.ondreamqwq.dbd.net.TerminalClickPacket;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -76,6 +77,9 @@ public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0x8C0E1116;
     private static final ResourceLocation CROSSHAIR = ResourceLocation.withDefaultNamespace("hud/crosshair");
+    private static Field STARTED;
+    private static boolean STARTED_RESOLVED;
+
     private static final int CROSSHAIR_SIZE = 15;
     private static final int INFO_X = 6;
     private static final int INFO_Y = 6;
@@ -456,14 +460,56 @@ public class PanelRemoteScreen extends Screen {
      * Clearing the depth buffer the panels filled in makes any depth test pass instead.
      */
     private void beginTopPass(GuiGraphics graphics) {
-        graphics.flush();
+        flushEveryBatch(graphics);
         // glClear honours the depth write mask: with the mask off - which is where the GUI batch leaves it -
-        // the clear is a silent no-op and the panels keep their depth, which is exactly why the frame and the
-        // crosshair still ended up behind the model even though the test was off.
+        // the clear is a silent no-op and the panels keep their depth.
         RenderSystem.depthMask(true);
         RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
+    }
+
+    /**
+     * Drains every render type that still holds vertices, not just the last one.
+     *
+     * <p>{@code GuiGraphics.flush()} ends only the most recent shared type (plus a handful of fixed ones).
+     * A module is free to draw through any type it likes - text, an item model, its own sprite batch - and
+     * those vertices then sit in the buffer until the game flushes the GUI at the very end of the frame,
+     * which is <em>after</em> this screen has drawn its overlay. That is why the frame and the crosshair
+     * kept ending up underneath the panels while every depth trick in the book changed nothing: it was never
+     * a depth problem in the end, it was the model being submitted later.
+     *
+     * <p>Juggling the depth buffer is still worth keeping for the types that do depth test, but the ordering
+     * is what actually decides the picture.
+     */
+    private static void flushEveryBatch(GuiGraphics graphics) {
+        graphics.flush();
+        MultiBufferSource.BufferSource buffers = Minecraft.getInstance().renderBuffers().bufferSource();
+        if (!STARTED_RESOLVED) {
+            STARTED_RESOLVED = true;
+            try {
+                STARTED = MultiBufferSource.BufferSource.class.getDeclaredField("startedBuilders");
+                STARTED.setAccessible(true);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                STARTED = null;
+            }
+        }
+        if (STARTED == null) {
+            return;
+        }
+        try {
+            Map<?, ?> started = (Map<?, ?>) STARTED.get(buffers);
+            if (started == null) {
+                return;
+            }
+            for (Object key : List.copyOf(started.keySet())) {
+                if (key instanceof RenderType type) {
+                    buffers.endBatch(type);
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            // the depth clear below still helps; a missing fast path must never take the screen down
+        }
     }
 
     private void endTopPass(GuiGraphics graphics) {
