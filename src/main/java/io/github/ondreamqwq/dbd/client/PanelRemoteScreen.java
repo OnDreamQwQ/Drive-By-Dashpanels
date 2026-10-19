@@ -76,6 +76,8 @@ public class PanelRemoteScreen extends Screen {
     private static final int BACKDROP = 0x8C0E1116;
     private static final ResourceLocation CROSSHAIR = ResourceLocation.withDefaultNamespace("hud/crosshair");
     private static final int CROSSHAIR_SIZE = 15;
+    private static final int INFO_X = 6;
+    private static final int INFO_Y = 6;
     private static final int NAME_COLOR = 0xFFFFFFFF;
     private static final int HINT_COLOR = 0xFFB0B0B0;
     private static final int HOLD_COLOR = 0xFFFFC400;
@@ -428,7 +430,7 @@ public class PanelRemoteScreen extends Screen {
             graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
-            drawInfoBox(graphics, rect, module);
+            drawInfoBox(graphics, module);
         }
         Component hint = holding != null
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
@@ -471,7 +473,7 @@ public class PanelRemoteScreen extends Screen {
      * Dashpanels' own tooltip was tried first, but it is pinned to the screen centre and fades through a
      * static opacity field that vanilla's HUD pass keeps pulling back to zero, so it never showed up here.
      */
-    private void drawInfoBox(GuiGraphics graphics, int[] rect, Module module) {
+    private void drawInfoBox(GuiGraphics graphics, Module module) {
         String name = module.getName();
         String reading = readValue(module);
         String state = holding == null ? null
@@ -487,8 +489,11 @@ public class PanelRemoteScreen extends Screen {
         }
         int boxWidth = widest + 8;
         int boxHeight = 13 + (reading == null ? 0 : 9) + (state == null ? 0 : 9);
-        int boxX = Mth.clamp(rect[0] + rect[2] / 2 - boxWidth / 2, 2, width - boxWidth - 2);
-        int boxY = Mth.clamp(rect[1] - boxHeight - 4, 2, height - boxHeight - 2);
+        // Pinned in the top left corner instead of following the module: the panel can be turned and zoomed,
+        // and a box that chased it ended up on top of the very module it describes (and behind the model when
+        // the depth flush slipped).
+        int boxX = INFO_X;
+        int boxY = INFO_Y;
         graphics.flush();
         graphics.fill(boxX, boxY, boxX + boxWidth, boxY + boxHeight, INFO_BACKDROP);
         graphics.renderOutline(boxX, boxY, boxWidth, boxHeight, INFO_EDGE);
