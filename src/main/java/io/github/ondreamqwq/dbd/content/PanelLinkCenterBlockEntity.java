@@ -17,11 +17,9 @@ import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.module.ModuleMap;
 import moth.boxxed.panels.api.module.io.IInput;
 import moth.boxxed.panels.api.module.io.IMultiInput;
-import moth.boxxed.panels.api.module.io.IOutput;
 import moth.boxxed.panels.api.module.io.ModuleIOInfo;
 import moth.boxxed.panels.api.network.ModulesNetwork;
 import moth.boxxed.panels.api.network.ModulesNetworkMember;
-import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -63,9 +61,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     /** NBT key for the rename aliases, so a rename survives a reload. */
     public static final String TAG_ALIASES = "dbd:aliases";
 
-    /** NBT key for the module this center feeds incoming cable signals into. */
-    public static final String TAG_TARGET = "dbd:target";
-
     /**
      * Upper bound on remembered rename aliases. A rename is never pruned just because its module is
      * gone -- a module torn down and put back under its new name has to revive the old cable without
@@ -87,16 +82,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /** Old channel name -> the module name it now stands for. Persisted, so a rename outlives a reload. */
     private final Map<String, String> aliases = new LinkedHashMap<>();
-
-    /**
-     * Module that incoming cable signals are written into, or an empty string when the center only
-     * publishes. This is the other half of the bridge: Dashpanels' own panel linker pushes a module
-     * value into an {@link IOutput}, so a module has no idea cables exist until something calls it.
-     */
-    private String target = "";
-
-    /** Last value handed to {@link #target}, so an unchanged signal does not repaint every tick. */
-    private int lastApplied = -1;
 
     public PanelLinkCenterBlockEntity(BlockPos pos, BlockState state) {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
@@ -130,7 +115,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
         }
         publish(level, pos, now);
-        applyIncoming(level, pos, modules);
     }
 
     @Override
@@ -278,128 +262,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         return mapped != null && live.containsKey(mapped);
     }
 
-    // ------------------------------------------------------------------ receiving
-
-    /** The module this center feeds incoming cable signals into, or an empty string. */
-    public String targetModule() {
-        return target;
-    }
-
-    /**
-     * Point this center at {@code moduleName}: cable signals arriving at the block are written into
-     * that module, the same way Dashpanels' panel linker writes its redstone link value.
-     *
-     * @return {@code null} when the bind was accepted, otherwise why it was refused
-     */
-    public String bindModule(String moduleName) {
-        Module module = collect().get(moduleName);
-        if (module == null) {
-            return "面板链接中心：读不到模块 " + moduleName + " —— 面板不在同一个线缆网络里？";
-        }
-        if (!(module instanceof IOutput)) {
-            return "面板链接中心：" + moduleName + " 不接收信号（只有指示灯泡、七段数码管这类输出模块可以）";
-        }
-        if (!ModuleIOInfo.getMultiExtensionsIfAny(module).isEmpty()) {
-            return "面板链接中心：" + moduleName + " 是多路模块，暂不支持接收";
-        }
-        target = moduleName;
-        lastApplied = -1;
-        setChanged();
-        Level level = getLevel();
-        if (level != null && !level.isClientSide) {
-            // Force the update tag out again so a client-side copy learns the new target.
-            synced = List.of();
-            level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
-        }
-        return null;
-    }
-
-    /** Forget the receive target. */
-    public boolean clearTarget() {
-        if (target.isEmpty()) {
-            return false;
-        }
-        target = "";
-        lastApplied = -1;
-        setChanged();
-        return true;
-    }
-
-    /**
-     * Write the cable signal arriving at this block into the target module.
-     *
-     * <p>Drive By Wire hands a sink nothing but a neighbour update, and the value it pushed is only
-     * reachable through the graph, so the graph is walked instead: every source whose sink set
-     * contains this position contributes the value it currently publishes on that channel. The
-     * center's own published channels are skipped, which is what keeps the block from reading its
-     * own output back and latching.
-     */
-    private void applyIncoming(Level level, BlockPos pos, Map<String, Module> modules) {
-        if (target.isEmpty()) {
-            return;
-        }
-        Module module = modules.get(target);
-        if (!(module instanceof IOutput out)) {
-            return;
-        }
-        int value = incoming(level, pos);
-        if (value == lastApplied) {
-            return;
-        }
-        lastApplied = value;
-        out.setAnalog(value);
-        AbstractPanelBlockEntity panel = module.parentBlockEntity;
-        if (panel != null) {
-            panel.networkUpdate(panel.getOrCreate());
-        }
-    }
-
-    /** Highest cable value currently delivered to {@code pos}, in redstone range. */
-    private int incoming(Level level, BlockPos pos) {
-        WireNetworkManager network = WireNetworkManager.get(level);
-        if (network == null) {
-            return 0;
-        }
-        int best = 0;
-        for (Map.Entry<Long, Map<String, Set<WireNetworkNode.WireNetworkSink>>> source
-                : network.getNetwork().entrySet()) {
-            BlockPos sourcePos = BlockPos.of(source.getKey());
-            if (sourcePos.equals(pos)) {
-                continue;
-            }
-            Map<String, Integer> values = network.getSourceSignals(sourcePos);
-            for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> channel : source.getValue().entrySet()) {
-                if (!sinksAt(channel.getValue(), pos)) {
-                    continue;
-                }
-                int value = WireNetworkManager.WORLD_CHANNEL.equals(channel.getKey())
-                        ? WireNetworkManager.computeWorldSignal(level, sourcePos)
-                        : values.getOrDefault(channel.getKey(), 0);
-                best = Math.max(best, value);
-            }
-        }
-        return clamp(best);
-    }
-
-    /**
-     * Whether one of {@code sinks} is this block. A sink is stored either as the sink block itself or
-     * as the node in front of it, depending on which end of the cable it is, so both are accepted.
-     */
-    private static boolean sinksAt(Set<WireNetworkNode.WireNetworkSink> sinks, BlockPos pos) {
-        for (WireNetworkNode.WireNetworkSink sink : sinks) {
-            BlockPos sinkPos = BlockPos.of(sink.position());
-            if (sinkPos.equals(pos)) {
-                return true;
-            }
-            int facing = sink.direction();
-            if (facing >= 0 && facing < Direction.values().length
-                    && sinkPos.relative(Direction.from3DDataValue(facing)).equals(pos)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     // ------------------------------------------------------------------ client sync
 
     @Override
@@ -410,9 +272,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             list.add(StringTag.valueOf(name));
         }
         tag.put(TAG_CHANNELS, list);
-        if (!target.isEmpty()) {
-            tag.putString(TAG_TARGET, target);
-        }
         return tag;
     }
 
@@ -421,8 +280,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         super.loadAdditional(tag, registries);
         List<String> names = readChannels(tag);
         synced = names;
-        target = tag.getString(TAG_TARGET);
-        lastApplied = -1;
         aliases.clear();
         if (tag.contains(TAG_ALIASES, Tag.TAG_COMPOUND)) {
             CompoundTag stored = tag.getCompound(TAG_ALIASES);
@@ -443,9 +300,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             stored.putString(alias.getKey(), alias.getValue());
         }
         tag.put(TAG_ALIASES, stored);
-        if (!target.isEmpty()) {
-            tag.putString(TAG_TARGET, target);
-        }
     }
 
     private static List<String> readChannels(CompoundTag tag) {
