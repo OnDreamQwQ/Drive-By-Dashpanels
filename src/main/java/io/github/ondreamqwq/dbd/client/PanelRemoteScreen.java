@@ -9,6 +9,7 @@ import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import io.github.ondreamqwq.dbd.net.TerminalClickPacket;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.DoubleBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -53,6 +54,7 @@ import org.joml.Quaternionf;
 import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.system.MemoryStack;
 
 /**
  * The screen behind the panel remote: every panel the receiver is wired to, drawn together as the one
@@ -77,6 +79,13 @@ public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0x8C0E1116;
     private static final ResourceLocation CROSSHAIR = ResourceLocation.withDefaultNamespace("hud/crosshair");
+    private boolean pinned;
+    private boolean pinSkipDelta;
+    private double pinX;
+    private double pinY;
+    private double lastRawX;
+    private double lastRawY;
+
     private static Field STARTED;
     private static boolean STARTED_RESOLVED;
 
@@ -200,7 +209,11 @@ public class PanelRemoteScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        pointerOnScreen();
+        if (holding != null) {
+            drivePinnedPointer();
+        } else {
+            pointerOnScreen();
+        }
         graphics.fill(0, 0, width, height, BACKDROP);
 
         if (panels.isEmpty()) {
@@ -695,6 +708,7 @@ public class PanelRemoteScreen extends Screen {
         ModuleHoldInteractionManager.stop();
         holding = null;
         holdHit = null;
+        unpinPointer();
     }
 
     private static boolean isUseButton(int button) {
@@ -744,6 +758,11 @@ public class PanelRemoteScreen extends Screen {
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
         if (holding != null) {
+            if (pinned) {
+                // The pinned pointer feeds the interaction from its own poll, once per frame; letting the
+                // absolute-position delta through as well would double every movement.
+                return true;
+            }
             ModuleHoldInteraction<?> active = activeHold();
             if (active != null) {
                 // Raw pixel deltas. MouseHandler hands the turn methods a y delta that grows downwards,
@@ -861,6 +880,88 @@ public class PanelRemoteScreen extends Screen {
         }
         minecraft.mouseHandler.grabMouse();
     }
+    /**
+     * Locks the pointer onto the module and hides it, the way turning the camera feels: the player drags
+     * and the value follows, no free cursor to chase and nothing to aim at a second time.
+     */
+    private void pinPointer(Hit hit) {
+        Minecraft minecraft = Minecraft.getInstance();
+        long handle = minecraft.getWindow().getWindow();
+        int[] rect = currentRect(hit);
+        pinX = rect[0] + rect[2] / 2.0D;
+        pinY = rect[1] + rect[3] / 2.0D;
+
+        MemoryStack stack = MemoryStack.stackPush();
+        try {
+            DoubleBuffer x = stack.mallocDouble(1);
+            DoubleBuffer y = stack.mallocDouble(1);
+            GLFW.glfwGetCursorPos(handle, x, y);
+            lastRawX = x.get(0);
+            lastRawY = y.get(0);
+        } finally {
+            stack.pop();
+        }
+
+        movePointerToPin(handle, minecraft);
+        GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+        pinned = true;
+        pinSkipDelta = true;
+    }
+
+    /** Gives the pointer back when the module is dropped. */
+    private void unpinPointer() {
+        if (!pinned) {
+            return;
+        }
+        pinned = false;
+        GLFW.glfwSetInputMode(Minecraft.getInstance().getWindow().getWindow(), GLFW.GLFW_CURSOR,
+                GLFW.GLFW_CURSOR_NORMAL);
+    }
+
+    private void movePointerToPin(long handle, Minecraft minecraft) {
+        double scale = minecraft.getWindow().getGuiScale();
+        GLFW.glfwSetCursorPos(handle, pinX * scale, pinY * scale);
+    }
+
+    /**
+     * Reads how far the pointer drifted since the last frame, recentres it on the module, and feeds that
+     * movement to the interaction.
+     *
+     * <p>Recentring every frame is what keeps the drag unbounded: otherwise the OS cursor walks off the
+     * module (and eventually off the window) and the movement stops. The deltas are polled here rather than
+     * taken from {@code mouseDragged}, because a recentred pointer makes the absolute-position delta the
+     * screen hands us meaningless - it would report the snap back instead of the drag.
+     */
+    private void drivePinnedPointer() {
+        ModuleHoldInteraction<?> active = activeHold();
+        Minecraft minecraft = Minecraft.getInstance();
+        long handle = minecraft.getWindow().getWindow();
+        double scale = minecraft.getWindow().getGuiScale();
+
+        double dx;
+        double dy;
+        MemoryStack stack = MemoryStack.stackPush();
+        try {
+            DoubleBuffer x = stack.mallocDouble(1);
+            DoubleBuffer y = stack.mallocDouble(1);
+            GLFW.glfwGetCursorPos(handle, x, y);
+            dx = x.get(0) - lastRawX;
+            dy = y.get(0) - lastRawY;
+            lastRawX = pinX * scale;
+            lastRawY = pinY * scale;
+        } finally {
+            stack.pop();
+        }
+
+        movePointerToPin(handle, minecraft);
+        if (pinSkipDelta) {
+            pinSkipDelta = false;
+            return;
+        }
+        if (active != null && (dx != 0.0D || dy != 0.0D)) {
+            active.activeMouseMove(dx / scale, dy / scale);
+        }
+    }
 
     /**
      * Runs the module, the same way right clicking it on the panel does.
@@ -878,6 +979,7 @@ public class PanelRemoteScreen extends Screen {
         if (active != null) {
             holding = active;
             holdHit = hit;
+            pinPointer(hit);
             minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
             return;
         }
