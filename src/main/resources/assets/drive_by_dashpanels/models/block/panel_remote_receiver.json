@@ -6,7 +6,7 @@
 	"textures": {
 		"0": "drive_by_dashpanels:block/panel_remote_receiver",
 		"1": "drive_by_dashpanels:block/metal",
-		"2": "drive_by_dashpanels:block/antenna",
+		"2": "drive_by_dashpanels:block/antenna_receiver",
 		"particle": "drive_by_dashpanels:block/metal"
 	},
 	"elements": [

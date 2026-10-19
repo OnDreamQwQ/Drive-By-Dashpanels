@@ -281,6 +281,16 @@ public class PanelRemoteScreen extends Screen {
         return null;
     }
 
+    /** A hit's module measured against the current view, so the outline tracks zoom and rotation. */
+    private int[] currentRect(Hit hit) {
+        for (ModuleRect rect : moduleRects(hit.panel())) {
+            if (rect.module() == hit.module()) {
+                return rect.rect();
+            }
+        }
+        return hit.rect();
+    }
+
     private record ModuleRect(Module module, int[] rect) {
     }
 
@@ -358,9 +368,12 @@ public class PanelRemoteScreen extends Screen {
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
         Hit hit = holding != null ? holdHit : (dragging && moved ? null : hitAt(mouseX, mouseY));
         if (hit != null) {
+            // The rectangle is measured again every frame instead of reusing the one stored in the hit,
+            // so the outline keeps hugging the module while the view is zoomed or turned.
+            int[] rect = currentRect(hit);
             graphics.pose().pushPose();
             graphics.pose().translate(0.0F, 0.0F, 400.0F);
-            graphics.renderOutline(hit.rect()[0], hit.rect()[1], hit.rect()[2], hit.rect()[3],
+            graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
             graphics.drawCenteredString(font, hit.module().getName(), width / 2, height - 32, NAME_COLOR);
@@ -426,9 +439,10 @@ public class PanelRemoteScreen extends Screen {
         if (holding != null) {
             ModuleHoldInteraction<?> active = activeHold();
             if (active != null) {
-                // Pixel deltas, with the vertical axis flipped to match the camera convention the hold
-                // interactions were written against.
-                active.activeMouseMove(dragX, -dragY);
+                // Raw pixel deltas. MouseHandler hands the turn methods a y delta that grows downwards,
+                // and the hold interactions were written against exactly that, so passing it straight
+                // through keeps "drag up, value goes up" the way the real panel behaves.
+                active.activeMouseMove(dragX, dragY);
             }
             return true;
         }
