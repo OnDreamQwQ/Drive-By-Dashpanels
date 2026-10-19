@@ -185,18 +185,25 @@ public class PanelRemoteScreen extends Screen {
     }
 
     /**
-     * One camera for the whole assembly. The player's angles go into the mounting rotation rather than
-     * on top of it: applied on top they would act in the world frame before the mounting is cancelled,
-     * and a panel facing the other way would spin the other way or show its edge.
+     * One camera for the whole assembly, with its centre parked at the middle of the screen and every
+     * panel offset from that centre by the distance it really has in the world.
+     *
+     * <p>The player's angles go into the mounting rotation rather than on top of it: applied on top
+     * they would act in the world frame before the mounting is cancelled, and a panel facing the other
+     * way would spin the other way or show its edge.
      */
     private void assemblyPose(PoseStack pose) {
         AbstractPanelBlockEntity reference = panels.get(0);
         pose.translate(width / 2.0F, height / 2.0F, CAMERA_DEPTH);
         pose.scale(cell, cell, -cell);
         pose.mulPose(Axis.XN.rotationDegrees(90.0F));
-        pose.translate((float) centreX, (float) centreY, (float) centreZ);
         pose.mulPose(mounted(reference).invert());
-        pose.translate((float) -centreX, (float) -centreY, (float) -centreZ);
+    }
+
+    /** Where a panel sits relative to the middle of the assembly, in blocks. */
+    private void panelOffset(PoseStack pose, BlockPos pos) {
+        pose.translate((float) (pos.getX() - centreX), (float) (pos.getY() - centreY),
+                (float) (pos.getZ() - centreZ));
     }
 
     private Quaternionf mounted(AbstractPanelBlockEntity panel) {
@@ -224,7 +231,7 @@ public class PanelRemoteScreen extends Screen {
         for (AbstractPanelBlockEntity panel : panels) {
             BlockPos pos = panel.getBlockPos();
             pose.pushPose();
-            pose.translate(pos.getX(), pos.getY(), pos.getZ());
+            panelOffset(pose, pos);
             // The board itself. Dashpanels renders it as an ordinary block model, not through the block
             // entity renderer, so without this the screen shows modules floating in nothing.
             minecraft.getBlockRenderer().renderSingleBlock(
@@ -287,7 +294,7 @@ public class PanelRemoteScreen extends Screen {
         pose.pushPose();
         assemblyPose(pose);
         BlockPos pos = panel.getBlockPos();
-        pose.translate(pos.getX(), pos.getY(), pos.getZ());
+        panelOffset(pose, pos);
         pose.pushPose();
         pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
         panel.renderTransform(pose);
