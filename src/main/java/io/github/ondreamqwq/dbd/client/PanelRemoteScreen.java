@@ -14,12 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import moth.boxxed.panels.api.module.Module;
-import moth.boxxed.panels.api.module.ModuleHitResult;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteraction;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteractionManager;
 import moth.boxxed.panels.api.module.io.IInput;
-import moth.boxxed.panels.api.module.tooltip.ModuleTooltipManager;
-import moth.boxxed.panels.api.module.tooltip.TooltipContext;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import moth.boxxed.panels.content.panel.ceiling.CeilingPanelBlockEntity;
 import moth.boxxed.panels.content.panel.normal.PanelBlock;
@@ -43,7 +40,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
-import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
@@ -76,6 +72,8 @@ public class PanelRemoteScreen extends Screen {
     private static final int HINT_COLOR = 0xFFB0B0B0;
     private static final int HOLD_COLOR = 0xFFFFC400;
     private static final int HIGHLIGHT = 0xFFFFC400;
+    private static final int INFO_BACKDROP = 0xD8101014;
+    private static final int INFO_EDGE = 0xFF585858;
     private static final float ZOOM_STEP = 0.12F;
     private static final float MIN_ZOOM = 0.5F;
     private static final float MAX_ZOOM = 3.0F;
@@ -406,9 +404,8 @@ public class PanelRemoteScreen extends Screen {
             graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
-            drawNameBox(graphics, hit);
+            drawInfoBox(graphics, rect, hit.module());
         }
-        ModuleTooltipManager.guiFrame(hit != null);
         Component hint = holding != null
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
                 : Component.translatable("gui.drive_by_dashpanels.remote.hint");
@@ -416,18 +413,24 @@ public class PanelRemoteScreen extends Screen {
     }
 
     /**
-     * Dashpanels' own name box: the module name plus whatever {@code IHoverTooltip} wants to add. It is
-     * faded in by {@code ModuleTooltipManager.guiFrame}, which we call every frame, and drawn before the
-     * frame is over so nothing the interaction puts on screen hides it.
+     * Name plus reading, drawn by us right above the module. Dashpanels' own tooltip was tried first, but
+     * it is pinned to the screen centre and fades through a static opacity field that vanilla's HUD pass
+     * keeps pulling back to zero, so it never showed up over this screen.
      */
-    private void drawNameBox(GuiGraphics graphics, Hit hit) {
+    private void drawInfoBox(GuiGraphics graphics, int[] rect, Module module) {
+        String name = module.getName();
+        String reading = readValue(module);
+        int textWidth = Math.max(font.width(name), reading == null ? 0 : font.width(reading));
+        int boxWidth = textWidth + 8;
+        int boxHeight = reading == null ? 13 : 22;
+        int boxX = Mth.clamp(rect[0] + rect[2] / 2 - boxWidth / 2, 2, width - boxWidth - 2);
+        int boxY = Mth.clamp(rect[1] - boxHeight - 4, 2, height - boxHeight - 2);
         graphics.flush();
-        ModuleTooltipManager.renderSelected(new TooltipContext(new ModuleHitResult(Vec3.ZERO)),
-                graphics, hit.module());
-        graphics.flush();
-        String value = readValue(hit.module());
-        if (value != null) {
-            graphics.drawCenteredString(font, value, width / 2, height - 32, NAME_COLOR);
+        graphics.fill(boxX, boxY, boxX + boxWidth, boxY + boxHeight, INFO_BACKDROP);
+        graphics.renderOutline(boxX, boxY, boxWidth, boxHeight, INFO_EDGE);
+        graphics.drawString(font, name, boxX + 4, boxY + 3, NAME_COLOR, false);
+        if (reading != null) {
+            graphics.drawString(font, reading, boxX + 4, boxY + 12, NAME_COLOR, false);
         }
     }
 
@@ -442,6 +445,14 @@ public class PanelRemoteScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
+        // Safety net: if the release never reaches the screen (focus loss, a screen switch, our own
+        // consumption order) drop the module as soon as the physical button is up again, instead of
+        // leaving it held down until something else happens to clear it.
+        if (holding != null && holdButton >= 0
+                && GLFW.glfwGetMouseButton(Minecraft.getInstance().getWindow().getWindow(), holdButton)
+                   == GLFW.GLFW_RELEASE) {
+            endHold();
+        }
         ModuleHoldInteraction<?> active = activeHold();
         if (active != null) {
             active.tick();
@@ -647,21 +658,21 @@ public class PanelRemoteScreen extends Screen {
         if (hit == null) {
             return true;
         }
-        if (scrollModule(hit.module(), scrollY)) {
-            return true;
-        }
+        // Prefer the module's own hold interaction: it knows which tag and which unit it speaks, so the
+        // wheel goes through exactly the same path a drag would. Only modules that expose a discrete
+        // wheel step and never start a hold fall through to the packet below.
         if (scrollMode && holdHit != null && holdHit.module() == hit.module()) {
             feedScroll(scrollY);
             return true;
         }
         endHold();
-        // Start the module the same way a press would, then drive it with the wheel instead of the mouse.
         activate(hit);
-        if (holding == null) {
+        if (holding != null) {
+            scrollMode = true;
+            feedScroll(scrollY);
             return true;
         }
-        scrollMode = true;
-        feedScroll(scrollY);
+        scrollModule(hit.module(), scrollY);
         return true;
     }
 
