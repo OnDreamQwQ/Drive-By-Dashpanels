@@ -26,6 +26,12 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
  * the connection either exists or is gone, and the player who sent them knows which module they were
  * pointing at, because the panel keeps a per-player selected module fed by Dashpanels' own selection
  * packet.
+ *
+ * <p>A cable is not limited to one module: the binding table remembers one entry per module, all of
+ * them fed by the same source and channel. Since a second click on the same cable makes Drive By Wire
+ * remove it, a removal is interpreted by what the player is aiming at -- the module it already feeds
+ * is released, any other module is added instead, and the cable is re-created as long as anything is
+ * still bound to it. Sneaking takes the cable out for good.
  */
 @EventBusSubscriber(modid = "drive_by_dashpanels")
 public final class ModuleWireHooks {
@@ -48,36 +54,30 @@ public final class ModuleWireHooks {
             return;
         }
         AbstractPanelBlockEntity panel = panelAt(serverLevel, sink, direction);
-        if (panel == null) {
+        if (panel == null || tooFar(player, panel)) {
             return;
         }
-        if (player.distanceToSqr(panel.getBlockPos().getCenter()) > 100.0D) {
+        String moduleName = selected(panel, player);
+        if (moduleName == null) {
             return;
         }
-        String moduleName = panel.getSelectedModule(player);
-        if (moduleName == null || moduleName.isBlank()) {
-            say(player, "线缆连到面板上了，但没对准模块：对准要控制的模块再点一次");
-            return;
-        }
-        Module module = panel.getModule(moduleName);
-        if (!(module instanceof IOutput)) {
+        if (!(panel.getModule(moduleName) instanceof IOutput)) {
             say(player, "模块 " + moduleName + " 不接收信号（只有指示灯泡、数码管这类输出模块可以）");
             return;
         }
         PanelModuleBinding previous = PanelBindings.get(panel, moduleName);
-        if (previous != null
-                && previous.source().equals(source)
-                && previous.channel().equals(channel)) {
-            say(player, "模块 " + moduleName + " 已经接在这个频道上了");
+        if (previous != null && previous.source().equals(source) && previous.channel().equals(channel)) {
+            say(player, "模块 " + moduleName + " 已经接在 " + channel + " 上了");
             return;
         }
-        PanelBindings.resetValue(panel, moduleName);
-        PanelBindings.put(panel, moduleName, new PanelModuleBinding(source, channel, sink, direction));
-        PanelBindings.markDirty(panel);
-        say(player, "模块 " + moduleName + "  <-  " + channel);
+        bind(panel, moduleName, new PanelModuleBinding(source, channel, sink, direction));
+        say(player, describe(panel, source, channel, moduleName));
     }
 
-    /** A cable just disconnected {@code sink}; drop whatever was bound to it. */
+    /**
+     * The cable just came off {@code sink}. Which module that concerns is decided by the selection:
+     * the one it already feeds is released, anything else is added.
+     */
     public static void wireRemoved(ServerPlayer player, Level level, BlockPos source, BlockPos sink,
             Direction direction, String channel) {
         if (!(level instanceof ServerLevel serverLevel)) {
@@ -91,19 +91,85 @@ public final class ModuleWireHooks {
         if (panel == null) {
             return;
         }
-        String matchName = null;
-        for (var entry : PanelBindings.of(panel).entrySet()) {
-            PanelModuleBinding binding = entry.getValue();
-            if (binding.source().equals(source) && binding.channel().equals(channel)) {
-                matchName = entry.getKey();
-                break;
-            }
-        }
-        if (matchName == null) {
+        if (player.isShiftKeyDown()) {
+            int dropped = PanelBindings.unbindChannel(panel, source, channel);
+            say(player, dropped > 0
+                    ? "已解除 " + dropped + " 个模块的线缆连接"
+                    : "已断开线缆");
             return;
         }
-        PanelBindings.unbind(panel, matchName);
-        say(player, "已解除模块 " + matchName + " 的线缆连接");
+        String moduleName = selected(panel, player);
+        if (moduleName == null) {
+            // Aiming at nothing: keep the cable if modules still depend on it.
+            if (keepAlive(serverLevel, panel, source, sink, direction, channel)) {
+                say(player, "这条线缆还控制着 " + PanelBindings.boundTo(panel, source, channel).size()
+                        + " 个模块：潜行切断可一并解除");
+            }
+            return;
+        }
+        PanelModuleBinding current = PanelBindings.get(panel, moduleName);
+        boolean sameChannel = current != null
+                && current.source().equals(source)
+                && current.channel().equals(channel);
+        if (sameChannel) {
+            PanelBindings.unbind(panel, moduleName);
+            say(player, "已解除模块 " + moduleName + " 的线缆连接");
+        } else {
+            if (!(panel.getModule(moduleName) instanceof IOutput)) {
+                say(player, "模块 " + moduleName + " 不接收信号（只有指示灯泡、数码管这类输出模块可以）");
+                return;
+            }
+            bind(panel, moduleName, new PanelModuleBinding(source, channel, sink, direction));
+        }
+        if (!keepAlive(serverLevel, panel, source, sink, direction, channel)) {
+            PanelBindings.unbind(panel, moduleName);
+            say(player, "线缆连接已断开");
+            return;
+        }
+        if (!sameChannel) {
+            say(player, describe(panel, source, channel, moduleName));
+        }
+    }
+
+    /** Put the cable back when something still reads from it; returns true if it is connected. */
+    private static boolean keepAlive(ServerLevel level, AbstractPanelBlockEntity panel, BlockPos source,
+            BlockPos sink, Direction direction, String channel) {
+        if (!PanelBindings.uses(panel, source, channel)) {
+            return false;
+        }
+        if (WireNetworkManager.hasConnection(level, source, sink, direction, channel)) {
+            return true;
+        }
+        WireNetworkManager.createConnection(level, source, sink, direction, channel);
+        return WireNetworkManager.hasConnection(level, source, sink, direction, channel);
+    }
+
+    private static void bind(AbstractPanelBlockEntity panel, String moduleName, PanelModuleBinding binding) {
+        PanelBindings.resetValue(panel, moduleName);
+        PanelBindings.put(panel, moduleName, binding);
+        PanelBindings.markDirty(panel);
+    }
+
+    private static String describe(AbstractPanelBlockEntity panel, BlockPos source, String channel,
+            String moduleName) {
+        int count = PanelBindings.boundTo(panel, source, channel).size();
+        String extra = count > 1 ? "（这个频道同时供给 " + count + " 个模块）" : "";
+        return "模块 " + moduleName + "  <-  " + channel + extra;
+    }
+
+    private static String selected(AbstractPanelBlockEntity panel, ServerPlayer player) {
+        if (tooFar(player, panel)) {
+            return null;
+        }
+        String moduleName = panel.getSelectedModule(player);
+        if (moduleName == null || moduleName.isBlank()) {
+            return null;
+        }
+        return moduleName;
+    }
+
+    private static boolean tooFar(ServerPlayer player, AbstractPanelBlockEntity panel) {
+        return player.distanceToSqr(panel.getBlockPos().getCenter()) > 100.0D;
     }
 
     /**

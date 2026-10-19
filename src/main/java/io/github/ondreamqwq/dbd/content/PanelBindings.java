@@ -208,6 +208,39 @@ public final class PanelBindings {
         return removed;
     }
 
+    /** Every module on this panel that is fed by the given source channel. */
+    public static List<String> boundTo(AbstractPanelBlockEntity panel, BlockPos source, String channel) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, PanelModuleBinding> entry : of(panel).entrySet()) {
+            PanelModuleBinding binding = entry.getValue();
+            if (binding.source().equals(source) && binding.channel().equals(channel)) {
+                out.add(entry.getKey());
+            }
+        }
+        return out;
+    }
+
+    /** Is anything on this panel still fed by the given source channel? */
+    public static boolean uses(AbstractPanelBlockEntity panel, BlockPos source, String channel) {
+        return !boundTo(panel, source, channel).isEmpty();
+    }
+
+    /**
+     * Drop every module fed by one source channel.
+     *
+     * <p>This is the only way to really get rid of a cable: a cable can feed several
+     * modules at once, so cutting it has to mean "release all of them".
+     */
+    public static int unbindChannel(AbstractPanelBlockEntity panel, BlockPos source, String channel) {
+        int dropped = 0;
+        for (String moduleName : boundTo(panel, source, channel)) {
+            if (unbind(panel, moduleName)) {
+                dropped++;
+            }
+        }
+        return dropped;
+    }
+
     private static void apply(AbstractPanelBlockEntity panel, String moduleName, IOutput output, int value) {
         Map<String, Integer> last;
         synchronized (LAST) {
