@@ -6,9 +6,11 @@ import java.util.List;
 import java.util.Map;
 import io.github.ondreamqwq.dbd.DbdRegistry;
 import moth.boxxed.panels.api.network.ModulesNetworkMemberBlock;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -138,29 +140,62 @@ public class PanelLinkCenterBlock extends ModulesNetworkMemberBlock implements e
         if (level.isClientSide || !(level.getBlockEntity(pos) instanceof PanelLinkCenterBlockEntity center)) {
             return InteractionResult.SUCCESS;
         }
-        String text;
+        Component text;
         if (player.isShiftKeyDown()) {
             // Sneaking drops the bookkeeping a rename left behind, plus any cable link whose channel
             // no longer has a module behind it. Doing this automatically instead would delete real
             // wiring whenever a chunk with the panels unloads and the network looks empty for a tick.
             int aliases = center.clearAliases();
             int links = center.dropDanglingConnections();
-            text = "面板链接中心：已清理 " + aliases + " 条改名记录、" + links + " 条失效连接";
+            text = report()
+                    .append(tone("已清理 ", ChatFormatting.GRAY))
+                    .append(count(aliases))
+                    .append(tone(" 条改名记录、", ChatFormatting.GRAY))
+                    .append(count(links))
+                    .append(tone(" 条失效连接", ChatFormatting.GRAY));
         } else if (center.network() == null) {
-            text = "面板链接中心：没有接入 Dashpanels 网络（四周要有线缆或面板，且必须水平相邻）";
+            text = report()
+                    .append(tone("没有接入 Dashpanels 网络", ChatFormatting.RED))
+                    .append(tone("（四周要有线缆或面板，且必须水平相邻）", ChatFormatting.DARK_GRAY));
         } else {
             List<String> names = center.channelNames();
             if (names.isEmpty()) {
-                text = "面板链接中心：已接入网络，但网络里没有可以发送信号的模块";
+                text = report().append(tone("已接入网络，但网络里没有可读取的模块", ChatFormatting.YELLOW));
             } else {
-                List<String> shown = names.size() > REPORT_LIMIT ? names.subList(0, REPORT_LIMIT) : names;
-                String picked = center.target();
-                text = "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", shown)
-                        + (names.size() > REPORT_LIMIT ? " ..." : "")
-                        + "（空手按 Alt 选择模块" + (picked.isEmpty() ? "" : "，已勾选 " + picked) + "）";
+                MutableComponent line = report()
+                        .append(count(names.size()))
+                        .append(tone(" 个频道 -> ", ChatFormatting.GRAY));
+                int shown = Math.min(names.size(), REPORT_LIMIT);
+                for (int i = 0; i < shown; i++) {
+                    if (i > 0) {
+                        line.append(tone(", ", ChatFormatting.DARK_GRAY));
+                    }
+                    line.append(tone(names.get(i), ChatFormatting.AQUA));
+                }
+                if (names.size() > REPORT_LIMIT) {
+                    line.append(tone(" ...", ChatFormatting.DARK_GRAY));
+                }
+                text = line;
             }
         }
-        player.displayClientMessage(Component.literal(text), false);
+        player.displayClientMessage(text, false);
         return InteractionResult.SUCCESS;
+    }
+
+    // ------------------------------------------------------------------ report styling
+
+    /** The gold block name every report line starts with, so a line is easy to pick out. */
+    private static MutableComponent report() {
+        return Component.literal("面板链接中心").withStyle(ChatFormatting.GOLD)
+                .append(Component.literal("：").withStyle(ChatFormatting.DARK_GRAY));
+    }
+
+    private static MutableComponent tone(String text, ChatFormatting colour) {
+        return Component.literal(text).withStyle(colour);
+    }
+
+    /** The numbers carry the meaning on every one of these lines, so they get their own colour. */
+    private static MutableComponent count(int value) {
+        return Component.literal(String.valueOf(value)).withStyle(ChatFormatting.GREEN);
     }
 }
