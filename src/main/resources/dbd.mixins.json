@@ -10,7 +10,8 @@
   ],
   "client": [
     "ClientWireNetworkHandlerMixin",
-    "client.AbstractPanelRendererMixin"
+    "client.AbstractPanelRendererMixin",
+    "client.GuiCrosshairMixin"
   ],
   "injectors": {
     "defaultRequire": 1

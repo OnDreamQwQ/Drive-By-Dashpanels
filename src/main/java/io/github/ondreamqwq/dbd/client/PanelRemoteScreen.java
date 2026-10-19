@@ -39,6 +39,7 @@ import net.minecraft.nbt.FloatTag;
 import net.minecraft.nbt.NumericTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
@@ -73,6 +74,8 @@ import org.lwjgl.glfw.GLFW;
 public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0x8C0E1116;
+    private static final ResourceLocation CROSSHAIR = ResourceLocation.withDefaultNamespace("hud/crosshair");
+    private static final int CROSSHAIR_SIZE = 15;
     private static final int NAME_COLOR = 0xFFFFFFFF;
     private static final int HINT_COLOR = 0xFFB0B0B0;
     private static final int HOLD_COLOR = 0xFFFFC400;
@@ -209,6 +212,7 @@ public class PanelRemoteScreen extends Screen {
         }
         drawHold(graphics, partialTick);
         drawOverlay(graphics, mouseX, mouseY);
+        drawCrosshair(graphics);
     }
 
     /**
@@ -436,6 +440,17 @@ public class PanelRemoteScreen extends Screen {
         return fresh != null ? fresh : hit.module();
     }
 
+    /**
+     * The crosshair, drawn last so it sits above the panels instead of behind them. A module that asked for
+     * the crosshair to be hidden (a joystick being dragged) hides this one too, exactly like the real one.
+     */
+    private void drawCrosshair(GuiGraphics graphics) {
+        if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
+            return;
+        }
+        graphics.blitSprite(CROSSHAIR, (width - CROSSHAIR_SIZE) / 2, (height - CROSSHAIR_SIZE) / 2,
+                CROSSHAIR_SIZE, CROSSHAIR_SIZE);
+    }
     /**
      * Name, a live reading and how the module is being driven, drawn by us right above the module.
      * Dashpanels' own tooltip was tried first, but it is pinned to the screen centre and fades through a
