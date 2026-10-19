@@ -68,8 +68,12 @@ public record TerminalClickPacket(BlockPos receiver, BlockPos panel, String modu
             if (module == null) {
                 return;
             }
+            if (player.distanceToSqr(packet.receiver().getCenter()) > 64.0D * 64.0D) {
+                return;
+            }
             module.onUse(level, player);
             panel.setChanged();
+            panel.blockChanged();
         });
     }
 }
