@@ -53,7 +53,7 @@ public record RequestChannelsPacket(BlockPos pos) implements CustomPacketPayload
                 return;
             }
             PacketDistributor.sendToPlayer(player,
-                    new ChannelListPacket(packet.pos(), center.senderChannels(), center.target()));
+                    new ChannelListPacket(packet.pos(), center.senderChannels()));
         });
     }
 }

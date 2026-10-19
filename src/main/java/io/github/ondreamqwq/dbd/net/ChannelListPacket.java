@@ -12,20 +12,19 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 /**
- * The channels a panel link center can put on the wire, sent back to the player who asked.
+ * The channels a panel link center puts on the wire, sent back to the player who asked.
  *
  * <p>The list is server-only: {@code ModulesNetworkManager} never populates a client-side network,
  * so the client cannot work this out by itself.
  *
- * <p>Only <i>sending</i> channels travel. A module that merely receives a signal has nothing to
- * publish, so offering it would put a channel on the wire that always reads 0.
+ * <p>Which of them is <i>currently selected</i> is not part of this packet -- that state lives in
+ * Drive By Wire on the client, next to the source block the player picked, and never reaches the
+ * server.
  *
  * @param pos the center the list belongs to
  * @param channels every sending module (multi-inputs split per sub-key), in panel order
- * @param current the channel currently picked, or an empty string for "all of them"
  */
-public record ChannelListPacket(BlockPos pos, List<String> channels, String current)
-        implements CustomPacketPayload {
+public record ChannelListPacket(BlockPos pos, List<String> channels) implements CustomPacketPayload {
 
     public static final Type<ChannelListPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(DbdMod.MOD_ID, "channel_list"));
@@ -37,7 +36,6 @@ public record ChannelListPacket(BlockPos pos, List<String> channels, String curr
                 for (String name : packet.channels()) {
                     buf.writeUtf(name);
                 }
-                buf.writeUtf(packet.current());
             },
             buf -> {
                 BlockPos pos = BlockPos.STREAM_CODEC.decode(buf);
@@ -46,7 +44,7 @@ public record ChannelListPacket(BlockPos pos, List<String> channels, String curr
                 for (int i = 0; i < size; i++) {
                     channels.add(buf.readUtf());
                 }
-                return new ChannelListPacket(pos, channels, buf.readUtf());
+                return new ChannelListPacket(pos, channels);
             });
 
     @Override
@@ -56,7 +54,6 @@ public record ChannelListPacket(BlockPos pos, List<String> channels, String curr
 
     /** Opens the picker. Runs on the client, so the screen is created on the render thread. */
     public static void handle(ChannelListPacket packet, IPayloadContext context) {
-        context.enqueueWork(() ->
-                ChannelSelectScreen.open(packet.pos(), packet.channels(), packet.current()));
+        context.enqueueWork(() -> ChannelSelectScreen.open(packet.pos(), packet.channels()));
     }
 }

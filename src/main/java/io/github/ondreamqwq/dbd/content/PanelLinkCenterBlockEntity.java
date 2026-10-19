@@ -63,9 +63,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     /** NBT key for the rename aliases, so a rename survives a reload. */
     public static final String TAG_ALIASES = "dbd:aliases";
 
-    /** NBT key for the module that received cable signals are written into. */
-    public static final String TAG_TARGET = "dbd:target";
-
     /**
      * Upper bound on remembered rename aliases. A rename is never pruned just because its module is
      * gone -- a module torn down and put back under its new name has to revive the old cable without
@@ -87,16 +84,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /** Old channel name -> the module name it now stands for. Persisted, so a rename outlives a reload. */
     private final Map<String, String> aliases = new LinkedHashMap<>();
-
-    /**
-     * The one module this center publishes, or an empty string to publish every sending module.
-     *
-     * <p>By default a center puts one channel per <i>sending</i> module on the wire; the picker
-     * narrows that down to a single module so a wire only ever offers the channel the player asked
-     * for. Receiving modules are never offered: they consume signals, so a channel for one would
-     * always read 0.
-     */
-    private String target = "";
 
     public PanelLinkCenterBlockEntity(BlockPos pos, BlockState state) {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
@@ -135,28 +122,15 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     // ------------------------------------------------------------------ channels
 
     /**
-     * Channels the player may pick from: every sending module, multi-inputs split per sub-key.
+     * Channels the player may pick from in the Alt picker: exactly what {@link #channelNames()}
+     * offers to the cable, i.e. every sending module (multi-inputs split per sub-key) plus the old
+     * name of any renamed module, so a channel a cable is already on can be kept.
      *
-     * <p>Receiving-only modules are deliberately absent. They consume signals rather than produce
-     * them, so publishing a channel for one would hand the wire a value that is always 0.
+     * <p>Receiving-only modules are absent. They consume signals rather than produce them, so
+     * putting one on the wire would hand the cable a value that always reads 0.
      */
     public List<String> senderChannels() {
-        return List.copyOf(valuesOf(collect()).keySet());
-    }
-
-    /** The module ticked in the Alt picker, or an empty string when nothing is ticked. */
-    public String target() {
-        return target;
-    }
-
-    /** Remember the module ticked with Alt. An empty name clears the tick. */
-    public void setTarget(String module) {
-        String next = module == null ? "" : module;
-        if (next.equals(target)) {
-            return;
-        }
-        target = next;
-        setChanged();
+        return channelNames();
     }
 
     @Override
@@ -191,12 +165,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             String previous = seenNames.put(entry.getValue(), name);
             if (previous == null || previous.equals(name)) {
                 continue;
-            }
-            if (previous.equals(target)) {
-                // The picked module was the one renamed: follow it, or the center would silently
-                // fall back to publishing everything.
-                target = name;
-                setChanged();
             }
             // The instance kept its identity, only its name moved: every alias pointing at the old
             // name now points at the new one.
@@ -335,7 +303,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 aliases.put(oldName, stored.getString(oldName));
             }
         }
-        target = tag.getString(TAG_TARGET);
         if (level != null && level.isClientSide) {
             PanelLinkChannels.store(worldPosition, names);
         }
@@ -349,9 +316,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             stored.putString(alias.getKey(), alias.getValue());
         }
         tag.put(TAG_ALIASES, stored);
-        if (!target.isEmpty()) {
-            tag.putString(TAG_TARGET, target);
-        }
     }
 
     private static List<String> readChannels(CompoundTag tag) {

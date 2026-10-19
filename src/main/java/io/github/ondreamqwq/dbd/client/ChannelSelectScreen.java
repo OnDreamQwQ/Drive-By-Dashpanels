@@ -1,7 +1,6 @@
 package io.github.ondreamqwq.dbd.client;
 
 import io.github.ondreamqwq.dbd.DbdMod;
-import io.github.ondreamqwq.dbd.net.SelectTargetPacket;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -11,10 +10,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvents;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Picks which sending module a panel link center puts on the wire.
+ * Picks the cable channel to use, straight from the channels a panel link center offers.
+ *
+ * <p>It is a shortcut for the scroll wheel: the center can put a dozen modules on the wire and
+ * scrolling to the right one is tedious, so this lists them by name instead.
  *
  * <p>The artwork is a re-cut of Dashpanels' own panel linker screen, so the layout constants below
  * are measured off the texture rather than copied from that screen: the window is still 220x158 at
@@ -23,9 +24,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * confirm tick) and one in the bottom bar (where the linker had its confirm button, now the exit).
  * The icons are therefore drawn straight into those slots, with no button frame of our own.
  *
- * <p>The list holds only modules that can send a signal; a receiving module would offer a channel
- * that always reads 0. Clicking the row that is already picked clears the pick again, which puts
- * every sender back on the wire.
+ * <p>The yellow row is the channel the cable is on right now, read live from Drive By Wire; the
+ * list holds only channels that carry a signal (receiving-only modules publish nothing).
  */
 public class ChannelSelectScreen extends Screen {
 
@@ -76,28 +76,29 @@ public class ChannelSelectScreen extends Screen {
     private static final int NAME_COLOR = 0xFFFFFF;
     private static final int EMPTY_COLOR = 0x7A5B45;
 
+    /** Background of the row the cable is currently on. */
+    private static final int CURRENT_FILL = 0x33FFC400;
+
     private final BlockPos center;
     private final List<String> channels;
-    private final String current;
 
     private int leftPos;
     private int topPos;
     private int scroll;
 
-    public ChannelSelectScreen(BlockPos center, List<String> channels, String current) {
+    public ChannelSelectScreen(BlockPos center, List<String> channels) {
         super(Component.translatable("gui.drive_by_dashpanels.channel_select"));
         this.center = center;
         this.channels = List.copyOf(channels);
-        this.current = current;
     }
 
     /** Opens the picker, unless it is already up (the server may answer more than one request). */
-    public static void open(BlockPos center, List<String> channels, String current) {
+    public static void open(BlockPos center, List<String> channels) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen instanceof ChannelSelectScreen) {
             return;
         }
-        minecraft.setScreen(new ChannelSelectScreen(center, channels, current));
+        minecraft.setScreen(new ChannelSelectScreen(center, channels));
     }
 
     @Override
@@ -123,8 +124,9 @@ public class ChannelSelectScreen extends Screen {
                     Component.translatable("gui.drive_by_dashpanels.channel_select.empty"),
                     this.leftPos + WINDOW_WIDTH / 2, this.topPos + ROW_FIRST + 24, EMPTY_COLOR);
         }
+        String current = WireSelection.channel();
         for (int index = 0; index < this.channels.size(); index++) {
-            renderRow(graphics, index, rowTop(index), mouseX, mouseY);
+            renderRow(graphics, index, rowTop(index), current, mouseX, mouseY);
         }
         graphics.disableScissor();
 
@@ -138,13 +140,13 @@ public class ChannelSelectScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
-    private void renderRow(GuiGraphics graphics, int index, int rowY, int mouseX, int mouseY) {
+    private void renderRow(GuiGraphics graphics, int index, int rowY, String current, int mouseX, int mouseY) {
         int rowX = this.leftPos + ROW_U;
         graphics.blit(TEXTURE, rowX, rowY, 0, ROW_V, ROW_WIDTH, ROW_HEIGHT);
 
         String name = this.channels.get(index);
-        if (name.equals(this.current)) {
-            graphics.fill(rowX + 2, rowY + 2, rowX + ROW_WIDTH - 2, rowY + ROW_HEIGHT - 2, 0x33FFC400);
+        if (name.equals(current)) {
+            graphics.fill(rowX + 2, rowY + 2, rowX + ROW_WIDTH - 2, rowY + ROW_HEIGHT - 2, CURRENT_FILL);
         }
         graphics.drawString(this.font, name, rowX + 8, rowY + 11, NAME_COLOR, false);
 
@@ -171,10 +173,7 @@ public class ChannelSelectScreen extends Screen {
             int index = slotAt(mouseX, mouseY);
             if (index >= 0) {
                 click();
-                String picked = this.channels.get(index);
-                // Ticking the current choice again clears it, so every sender goes back on the wire.
-                String send = picked.equals(this.current) ? "" : picked;
-                PacketDistributor.sendToServer(new SelectTargetPacket(this.center, send));
+                pick(this.channels.get(index));
                 onClose();
                 return true;
             }
@@ -199,6 +198,22 @@ public class ChannelSelectScreen extends Screen {
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    /**
+     * Put the cable on {@code name}, exactly like scrolling to it would.
+     *
+     * <p>The channel is client state inside Drive By Wire, so there is no packet to send: it travels
+     * to the server inside the "add connection" packet the next time the player clicks a sink.
+     */
+    private static void pick(String name) {
+        if (WireSelection.select(name)) {
+            Minecraft minecraft = Minecraft.getInstance();
+            if (minecraft.player != null) {
+                minecraft.player.displayClientMessage(
+                        Component.translatable("gui.drive_by_dashpanels.channel_select.picked", name), true);
+            }
+        }
     }
 
     /** Top edge of a row in screen space, already scrolled. */

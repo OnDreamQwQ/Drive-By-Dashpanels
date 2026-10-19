@@ -38,6 +38,8 @@ public final class WireSelection {
 
     private static Field sourceField;
     private static boolean resolved;
+    private static Field channelField;
+    private static boolean channelResolved;
 
     private WireSelection() {}
 
@@ -75,6 +77,46 @@ public final class WireSelection {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    /**
+     * Move the cable onto {@code channel}, as if the player had scrolled to it.
+     *
+     * <p>{@code currentChannel} is private static with a getter and no setter, and it is pure client
+     * state: the channel only reaches the server inside the "add connection" packet the next time the
+     * player clicks a sink. Writing it here is therefore exactly what scrolling does, with no packet
+     * and no server round trip.
+     *
+     * @return whether the write went through
+     */
+    public static boolean select(String channel) {
+        if (channel == null || channel.isEmpty()) {
+            return false;
+        }
+        Field field = channelField();
+        if (field == null) {
+            return false;
+        }
+        try {
+            field.set(null, channel);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Field channelField() {
+        if (!channelResolved) {
+            channelResolved = true;
+            try {
+                Field field = ClientWireNetworkHandler.class.getDeclaredField("currentChannel");
+                field.setAccessible(true);
+                channelField = field;
+            } catch (Throwable ignored) {
+                channelField = null;
+            }
+        }
+        return channelField;
     }
 
     /**

@@ -13,8 +13,6 @@ public final class DbdNet {
         PayloadRegistrar registrar = event.registrar("1");
         registrar.playToServer(RequestChannelsPacket.TYPE, RequestChannelsPacket.STREAM_CODEC,
                 RequestChannelsPacket::handle);
-        registrar.playToServer(SelectTargetPacket.TYPE, SelectTargetPacket.STREAM_CODEC,
-                SelectTargetPacket::handle);
         registrar.playToClient(ChannelListPacket.TYPE, ChannelListPacket.STREAM_CODEC,
                 ChannelListPacket::handle);
     }

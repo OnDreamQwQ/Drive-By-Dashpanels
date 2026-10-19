@@ -2,5 +2,6 @@
   "itemGroup.drive_by_dashpanels": "Panel Link: Drive By Wire",
   "block.drive_by_dashpanels.panel_link_center": "Panel Link Center",
   "gui.drive_by_dashpanels.channel_select": "Select a module",
-  "gui.drive_by_dashpanels.channel_select.empty": "No module on this panel sends a signal"
+  "gui.drive_by_dashpanels.channel_select.empty": "No module on this panel sends a signal",
+  "gui.drive_by_dashpanels.channel_select.picked": "Channel selected: %s"
 }
