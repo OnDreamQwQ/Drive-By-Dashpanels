@@ -457,6 +457,10 @@ public class PanelRemoteScreen extends Screen {
      */
     private void beginTopPass(GuiGraphics graphics) {
         graphics.flush();
+        // glClear honours the depth write mask: with the mask off - which is where the GUI batch leaves it -
+        // the clear is a silent no-op and the panels keep their depth, which is exactly why the frame and the
+        // crosshair still ended up behind the model even though the test was off.
+        RenderSystem.depthMask(true);
         RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
