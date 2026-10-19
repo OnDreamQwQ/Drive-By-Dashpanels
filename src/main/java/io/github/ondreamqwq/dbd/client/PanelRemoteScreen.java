@@ -425,7 +425,9 @@ public class PanelRemoteScreen extends Screen {
             graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
-            drawInfoBox(graphics, module);
+            if (DbdConfig.infoBox()) {
+                drawInfoBox(graphics, module);
+            }
         }
         Component hint = holding != null
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")

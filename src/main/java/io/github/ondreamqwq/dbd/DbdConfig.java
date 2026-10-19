@@ -39,6 +39,14 @@ public final class DbdConfig {
      */
     public static final ModConfigSpec.DoubleValue CAMERA_TILT;
 
+    /**
+     * Whether the panel remote draws the little name/reading box in its top left corner.
+     *
+     * <p>On by default because it is the only place that spells out which module is being driven and
+     * what it is set to; off for players who would rather see the panels alone.
+     */
+    public static final ModConfigSpec.BooleanValue INFO_BOX;
+
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
 
@@ -64,6 +72,11 @@ public final class DbdConfig {
                         "Positive looks down at the panel, negative looks up at it, 0 is face on.")
                 .defineInRange("cameraTilt", 45.0D, -89.0D, 89.0D);
 
+        INFO_BOX = builder
+                .comment("Draw the name and reading box in the panel remote's top left corner.",
+                        "Turn this off if you would rather look at the panels without anything over them.")
+                .define("infoBox", true);
+
         SPEC = builder.build();
     }
 
@@ -80,5 +93,9 @@ public final class DbdConfig {
 
     public static float cameraTilt() {
         return CAMERA_TILT.get().floatValue();
+    }
+
+    public static boolean infoBox() {
+        return INFO_BOX.get();
     }
 }
