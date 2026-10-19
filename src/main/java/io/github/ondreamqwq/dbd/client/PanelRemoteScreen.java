@@ -604,8 +604,8 @@ public class PanelRemoteScreen extends Screen {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         }
 
-        // Ctrl+Alt+wheel zooms; a bare wheel turns the knob it is pointing at.
-        if (hasControlDown() && hasAltDown()) {
+        // Ctrl+wheel zooms; a bare wheel turns the module it is pointing at.
+        if (hasControlDown()) {
             zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
             layout();
             return true;
@@ -630,11 +630,16 @@ public class PanelRemoteScreen extends Screen {
         return true;
     }
 
-    /** Hands one notch of wheel travel to the interaction the way a drag of the same length would. */
+    /**
+     * Hands one notch of wheel travel to the interaction the way a drag would. Both axes get the same
+     * amount with opposite signs: the knob family reads the horizontal delta and the scroll wheel reads
+     * the vertical one, so a notch turns either of them in the "up means bigger" direction.
+     */
     private void feedScroll(double scrollY) {
         ModuleHoldInteraction<?> active = activeHold();
         if (active != null) {
-            active.activeMouseMove(SCROLL_NOTCH * scrollY, 0.0D);
+            double step = SCROLL_NOTCH * scrollY;
+            active.activeMouseMove(step, -step);
         }
     }
 
