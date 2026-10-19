@@ -404,9 +404,10 @@ public class PanelRemoteScreen extends Screen {
 
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
         Hit hit = holding != null ? holdHit : (dragging && moved ? null : hitAt(mouseX, mouseY));
-        // The panels are real 3D geometry with depth written, so anything drawn at the GUI depth loses to
-        // them. Flush them out first and turn the depth test off, otherwise the outline and the name box
-        // land behind the model.
+        // The panels are real 3D geometry with depth written, and a GuiGraphics draw only reaches the screen
+        // when its buffer is flushed - which happens at the end of the frame unless asked otherwise. So the
+        // overlay is flushed here, by hand, while the depth test is off; re-enabling it before the flush was
+        // what kept the name box hidden behind the model.
         graphics.flush();
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
@@ -426,6 +427,7 @@ public class PanelRemoteScreen extends Screen {
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
                 : Component.translatable("gui.drive_by_dashpanels.remote.hint");
         graphics.drawCenteredString(font, hint, width / 2, height - 16, HINT_COLOR);
+        graphics.flush();
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();
     }
@@ -448,8 +450,14 @@ public class PanelRemoteScreen extends Screen {
         if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
             return;
         }
+        graphics.flush();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
         graphics.blitSprite(CROSSHAIR, (width - CROSSHAIR_SIZE) / 2, (height - CROSSHAIR_SIZE) / 2,
                 CROSSHAIR_SIZE, CROSSHAIR_SIZE);
+        graphics.flush();
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
     }
     /**
      * Name, a live reading and how the module is being driven, drawn by us right above the module.
