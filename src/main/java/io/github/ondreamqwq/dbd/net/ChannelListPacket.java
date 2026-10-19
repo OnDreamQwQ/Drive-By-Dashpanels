@@ -12,17 +12,21 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 /**
- * The modules a panel link center can drive, sent back to the player who asked for the picker.
+ * The modules on a panel link center's network, sent back to the player who asked for the picker.
  *
  * <p>The module list is server-only: {@code ModulesNetworkManager} never populates a client-side
- * network, so the client cannot work this out by itself. Only modules that implement
- * {@code IOutput} are listed, because those are the only ones a received signal can be written to.
+ * network, so the client cannot work this out by itself.
+ *
+ * <p>Two lists travel because the picker shows everything but only ticks what it can actually write
+ * to: listing only {@code IOutput} modules made newly added modules look like they were missing.
  *
  * @param pos the center the list belongs to
- * @param modules the drivable module names, in panel order
+ * @param modules every module name, in panel order
+ * @param drivable the subset of {@code modules} a received signal can be written into
  * @param target the module currently selected, or an empty string
  */
-public record ChannelListPacket(BlockPos pos, List<String> modules, String target) implements CustomPacketPayload {
+public record ChannelListPacket(BlockPos pos, List<String> modules, List<String> drivable, String target)
+        implements CustomPacketPayload {
 
     public static final Type<ChannelListPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(DbdMod.MOD_ID, "channel_list"));
@@ -30,21 +34,32 @@ public record ChannelListPacket(BlockPos pos, List<String> modules, String targe
     public static final StreamCodec<RegistryFriendlyByteBuf, ChannelListPacket> STREAM_CODEC = StreamCodec.of(
             (buf, packet) -> {
                 BlockPos.STREAM_CODEC.encode(buf, packet.pos());
-                buf.writeVarInt(packet.modules().size());
-                for (String name : packet.modules()) {
-                    buf.writeUtf(name);
-                }
+                writeList(buf, packet.modules());
+                writeList(buf, packet.drivable());
                 buf.writeUtf(packet.target());
             },
             buf -> {
                 BlockPos pos = BlockPos.STREAM_CODEC.decode(buf);
-                int size = buf.readVarInt();
-                List<String> modules = new ArrayList<>(size);
-                for (int i = 0; i < size; i++) {
-                    modules.add(buf.readUtf());
-                }
-                return new ChannelListPacket(pos, modules, buf.readUtf());
+                List<String> modules = readList(buf);
+                List<String> drivable = readList(buf);
+                return new ChannelListPacket(pos, modules, drivable, buf.readUtf());
             });
+
+    private static void writeList(RegistryFriendlyByteBuf buf, List<String> values) {
+        buf.writeVarInt(values.size());
+        for (String value : values) {
+            buf.writeUtf(value);
+        }
+    }
+
+    private static List<String> readList(RegistryFriendlyByteBuf buf) {
+        int size = buf.readVarInt();
+        List<String> values = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            values.add(buf.readUtf());
+        }
+        return values;
+    }
 
     @Override
     public Type<? extends CustomPacketPayload> type() {
@@ -53,6 +68,7 @@ public record ChannelListPacket(BlockPos pos, List<String> modules, String targe
 
     /** Opens the picker. Runs on the client, so the screen is created on the render thread. */
     public static void handle(ChannelListPacket packet, IPayloadContext context) {
-        context.enqueueWork(() -> ChannelSelectScreen.open(packet.pos(), packet.modules(), packet.target()));
+        context.enqueueWork(() ->
+                ChannelSelectScreen.open(packet.pos(), packet.modules(), packet.drivable(), packet.target()));
     }
 }

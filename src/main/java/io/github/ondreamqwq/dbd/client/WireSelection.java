@@ -17,8 +17,9 @@ import net.minecraft.core.BlockPos;
  *
  * <ul>
  *   <li>no source selected -> no outline at all;</li>
- *   <li>source selected, module on that source and on the currently scrolled-to channel -> yellow;</li>
- *   <li>source selected, anything else -> grey.</li>
+ *   <li>the selected source feeds this module on the channel scrolled to -> yellow;</li>
+ *   <li>the selected source feeds this module on another channel -> grey;</li>
+ *   <li>the selected source has nothing to do with this module -> no outline.</li>
  * </ul>
  *
  * <p>{@code ClientWireNetworkHandler#getCurrentChannel()} is public, but {@code selectedSource} is a
@@ -79,8 +80,10 @@ public final class WireSelection {
     /**
      * Outline colour for one module, or {@code 0} when nothing should be drawn.
      *
-     * <p>A module may listen to several sources, so it is yellow when <i>any</i> of
-     * them is the source and channel currently selected.
+     * <p>A module may listen to several sources. It is yellow when <i>any</i> of them is the source
+     * and channel currently selected, and grey only when the selected source is one of its sources
+     * but on another channel -- a source the module has nothing to do with draws no outline at all,
+     * so a cable picked up elsewhere never lights up unrelated modules.
      */
     public static int frameColor(AbstractPanelBlockEntity panel, Module module) {
         List<PanelModuleBinding> bindings = PanelBindings.bindings(panel, module.getName());
@@ -92,13 +95,16 @@ public final class WireSelection {
             return 0;
         }
         String channel = channel();
-        if (channel != null) {
-            for (PanelModuleBinding binding : bindings) {
-                if (source.equals(binding.source()) && channel.equals(binding.channel())) {
-                    return MATCHING;
-                }
+        boolean sameSource = false;
+        for (PanelModuleBinding binding : bindings) {
+            if (!source.equals(binding.source())) {
+                continue;
+            }
+            sameSource = true;
+            if (channel != null && channel.equals(binding.channel())) {
+                return MATCHING;
             }
         }
-        return OTHER;
+        return sameSource ? OTHER : 0;
     }
 }

@@ -2,13 +2,17 @@ package io.github.ondreamqwq.dbd.client;
 
 import io.github.ondreamqwq.dbd.DbdMod;
 import io.github.ondreamqwq.dbd.net.SelectTargetPacket;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvents;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
@@ -20,6 +24,10 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * as empty slots in the texture -- one in the row (where the linker had its delete button, now the
  * confirm tick) and one in the bottom bar (where the linker had its confirm button, now the exit).
  * The icons are therefore drawn straight into those slots, with no button frame of our own.
+ *
+ * <p>Every module on the network is listed, not just the ones a signal can be written into, so a
+ * player who adds a module always sees it appear. Rows that cannot receive are greyed out and carry a
+ * tooltip instead of a tick.
  */
 public class ChannelSelectScreen extends Screen {
 
@@ -64,34 +72,37 @@ public class ChannelSelectScreen extends Screen {
 
     private static final int LIST_TOP = 16;
     private static final int LIST_BOTTOM = 127;
-    private static final int LIST_HEIGHT = LIST_BOTTOM - LIST_TOP;
 
+    /** The exact colour and call style Dashpanels' panel linker uses for its own title. */
     private static final int TITLE_COLOR = 0x592424;
     private static final int NAME_COLOR = 0xFFFFFF;
+    private static final int DISABLED_COLOR = 0x9A9A9A;
     private static final int EMPTY_COLOR = 0x7A5B45;
 
     private final BlockPos center;
     private final List<String> modules;
+    private final Set<String> drivable;
     private final String target;
 
     private int leftPos;
     private int topPos;
     private int scroll;
 
-    public ChannelSelectScreen(BlockPos center, List<String> modules, String target) {
+    public ChannelSelectScreen(BlockPos center, List<String> modules, List<String> drivable, String target) {
         super(Component.translatable("gui.drive_by_dashpanels.channel_select"));
         this.center = center;
         this.modules = List.copyOf(modules);
+        this.drivable = new HashSet<>(drivable);
         this.target = target;
     }
 
     /** Opens the picker, unless it is already up (the server may answer more than one request). */
-    public static void open(BlockPos center, List<String> modules, String target) {
+    public static void open(BlockPos center, List<String> modules, List<String> drivable, String target) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen instanceof ChannelSelectScreen) {
             return;
         }
-        minecraft.setScreen(new ChannelSelectScreen(center, modules, target));
+        minecraft.setScreen(new ChannelSelectScreen(center, modules, drivable, target));
     }
 
     @Override
@@ -103,10 +114,12 @@ public class ChannelSelectScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
         graphics.blit(TEXTURE, this.leftPos, this.topPos, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
-        graphics.drawCenteredString(this.font, this.title,
-                this.leftPos + WINDOW_WIDTH / 2, this.topPos + 4, TITLE_COLOR);
+
+        // Same as the panel linker: no shadow, so the dark brown title sits flat on the gold bar.
+        String title = this.title.getString();
+        int titleX = (WINDOW_WIDTH - this.font.width(title)) / 2;
+        graphics.drawString(this.font, title, this.leftPos + titleX, this.topPos + 4, TITLE_COLOR, false);
 
         graphics.enableScissor(this.leftPos, this.topPos + LIST_TOP,
                 this.leftPos + WINDOW_WIDTH, this.topPos + LIST_BOTTOM);
@@ -127,6 +140,13 @@ public class ChannelSelectScreen extends Screen {
         }
         drawIcon(graphics, EXIT_U, EXIT_V, exitX, exitY);
 
+        int hovered = rowAt(mouseX, mouseY);
+        if (hovered >= 0 && !isDrivable(this.modules.get(hovered))) {
+            graphics.renderTooltip(this.font,
+                    Component.translatable("gui.drive_by_dashpanels.channel_select.no_output"),
+                    mouseX, mouseY);
+        }
+
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
@@ -135,10 +155,15 @@ public class ChannelSelectScreen extends Screen {
         graphics.blit(TEXTURE, rowX, rowY, 0, ROW_V, ROW_WIDTH, ROW_HEIGHT);
 
         String name = this.modules.get(index);
+        boolean can = isDrivable(name);
         if (name.equals(this.target)) {
             graphics.fill(rowX + 2, rowY + 2, rowX + ROW_WIDTH - 2, rowY + ROW_HEIGHT - 2, 0x33FFC400);
         }
-        graphics.drawString(this.font, name, rowX + 8, rowY + 11, NAME_COLOR, false);
+        graphics.drawString(this.font, name, rowX + 8, rowY + 11,
+                can ? NAME_COLOR : DISABLED_COLOR, false);
+        if (!can) {
+            return;
+        }
 
         int slotX = rowX + SLOT_X;
         int slotY = rowY + SLOT_Y - ROW_V;
@@ -156,11 +181,13 @@ public class ChannelSelectScreen extends Screen {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button == 0) {
             if (inside(mouseX, mouseY, this.leftPos + EXIT_X, this.topPos + EXIT_Y, SLOT_WIDTH, SLOT_HEIGHT)) {
+                click();
                 onClose();
                 return true;
             }
             int index = slotAt(mouseX, mouseY);
-            if (index >= 0) {
+            if (index >= 0 && isDrivable(this.modules.get(index))) {
+                click();
                 PacketDistributor.sendToServer(new SelectTargetPacket(this.center, this.modules.get(index)));
                 onClose();
                 return true;
@@ -180,8 +207,7 @@ public class ChannelSelectScreen extends Screen {
 
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The artwork draws its own frame, so the world only gets dimmed instead of blurred away.
-        renderTransparentBackground(graphics);
+        // Nothing: the artwork frames itself and the world must stay at full brightness behind it.
     }
 
     @Override
@@ -189,9 +215,30 @@ public class ChannelSelectScreen extends Screen {
         return false;
     }
 
+    private boolean isDrivable(String name) {
+        return this.drivable.contains(name);
+    }
+
     /** Top edge of a row in screen space, already scrolled. */
     private int rowTop(int index) {
         return this.topPos + ROW_FIRST + index * ROW_STEP - this.scroll;
+    }
+
+    /** Index of the row under the mouse, clipped to the list, or -1. */
+    private int rowAt(double mouseX, double mouseY) {
+        if (mouseX < this.leftPos + ROW_U || mouseX >= this.leftPos + ROW_U + ROW_WIDTH) {
+            return -1;
+        }
+        if (mouseY < this.topPos + LIST_TOP || mouseY >= this.topPos + LIST_BOTTOM) {
+            return -1;
+        }
+        for (int index = 0; index < this.modules.size(); index++) {
+            int rowY = rowTop(index);
+            if (mouseY >= rowY && mouseY < rowY + ROW_HEIGHT) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     /** Index of the row whose check slot is under the mouse, or -1. */
@@ -210,9 +257,16 @@ public class ChannelSelectScreen extends Screen {
         return -1;
     }
 
+    /** Scrolled far enough that the last row is fully visible, not just its top edge. */
     private int clampScroll(int value) {
-        int max = Math.max(0, this.modules.size() * ROW_STEP - LIST_HEIGHT);
+        int lastRowBottom = ROW_FIRST + Math.max(0, this.modules.size() - 1) * ROW_STEP + ROW_HEIGHT;
+        int max = Math.max(0, lastRowBottom - LIST_BOTTOM);
         return Math.max(0, Math.min(value, max));
+    }
+
+    private static void click() {
+        Minecraft.getInstance().getSoundManager()
+                .play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
     }
 
     private static boolean inside(double mouseX, double mouseY, int x, int y, int width, int height) {

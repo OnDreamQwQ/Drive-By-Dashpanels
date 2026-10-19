@@ -148,6 +148,11 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         return List.copyOf(names);
     }
 
+    /** Every module on the network, in panel order, whether or not it can receive a signal. */
+    public List<String> moduleNames() {
+        return List.copyOf(collect().keySet());
+    }
+
     /** Module the incoming cables drive, or an empty string. */
     public String target() {
         return target;
