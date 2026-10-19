@@ -1,5 +1,6 @@
 package io.github.ondreamqwq.dbd;
 
+import io.github.ondreamqwq.dbd.net.DbdNet;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -23,6 +24,7 @@ public final class DbdMod {
 
     public DbdMod(IEventBus modEventBus, ModContainer container) {
         DbdRegistry.register(modEventBus);
+        modEventBus.addListener(DbdNet::register);
         container.registerConfig(ModConfig.Type.COMMON, DbdConfig.SPEC);
     }
 }

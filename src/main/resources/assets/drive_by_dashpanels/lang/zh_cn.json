@@ -1,4 +1,6 @@
 {
   "itemGroup.drive_by_dashpanels": "面板链接：线缆控制",
-  "block.drive_by_dashpanels.panel_link_center": "面板链接中心"
+  "block.drive_by_dashpanels.panel_link_center": "面板链接中心",
+  "gui.drive_by_dashpanels.channel_select": "选择模块",
+  "gui.drive_by_dashpanels.channel_select.empty": "这里没有可驱动的模块"
 }

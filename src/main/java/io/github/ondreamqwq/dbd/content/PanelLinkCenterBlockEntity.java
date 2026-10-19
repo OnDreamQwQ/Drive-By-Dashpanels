@@ -17,9 +17,11 @@ import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.module.ModuleMap;
 import moth.boxxed.panels.api.module.io.IInput;
 import moth.boxxed.panels.api.module.io.IMultiInput;
+import moth.boxxed.panels.api.module.io.IOutput;
 import moth.boxxed.panels.api.module.io.ModuleIOInfo;
 import moth.boxxed.panels.api.network.ModulesNetwork;
 import moth.boxxed.panels.api.network.ModulesNetworkMember;
+import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
@@ -61,6 +63,9 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     /** NBT key for the rename aliases, so a rename survives a reload. */
     public static final String TAG_ALIASES = "dbd:aliases";
 
+    /** NBT key for the module that received cable signals are written into. */
+    public static final String TAG_TARGET = "dbd:target";
+
     /**
      * Upper bound on remembered rename aliases. A rename is never pruned just because its module is
      * gone -- a module torn down and put back under its new name has to revive the old cable without
@@ -82,6 +87,18 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /** Old channel name -> the module name it now stands for. Persisted, so a rename outlives a reload. */
     private final Map<String, String> aliases = new LinkedHashMap<>();
+
+    /**
+     * Module the cables coming <i>into</i> this center drive, or an empty string for none.
+     *
+     * <p>Publishing (module -&gt; cable) needs no choice: every module gets its own channel. The other
+     * direction does need one, because a cable arriving here carries a single channel and there may
+     * be any number of modules on the network. The picker screen sets this.
+     */
+    private String target = "";
+
+    /** Last value written into {@link #target}, so the module is only updated when the signal moves. */
+    private int lastApplied = -1;
 
     public PanelLinkCenterBlockEntity(BlockPos pos, BlockState state) {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
@@ -115,6 +132,121 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
         }
         publish(level, pos, now);
+        applyIncoming(level, pos, modules);
+    }
+
+    // ------------------------------------------------------------------ incoming signals
+
+    /** Module names a received cable signal can be written into: {@code IOutput} modules only. */
+    public List<String> outputModules() {
+        List<String> names = new ArrayList<>();
+        for (Map.Entry<String, Module> entry : collect().entrySet()) {
+            if (entry.getValue() instanceof IOutput) {
+                names.add(entry.getKey());
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /** Module the incoming cables drive, or an empty string. */
+    public String target() {
+        return target;
+    }
+
+    /** Choose the module incoming cable signals drive. An empty name clears the choice. */
+    public void setTarget(String module) {
+        String next = module == null ? "" : module;
+        if (next.equals(target)) {
+            return;
+        }
+        target = next;
+        lastApplied = -1;
+        setChanged();
+    }
+
+    /**
+     * Write the incoming signal into the chosen module.
+     *
+     * <p>"Incoming" means a cable whose <i>sink</i> is this block: Drive By Wire stores links as
+     * (source, channel) -&gt; sinks, so the value is looked up per channel and the strongest feeding
+     * link wins, which matches how redstone dust settles several inputs.
+     */
+    private void applyIncoming(Level level, BlockPos pos, Map<String, Module> modules) {
+        if (target.isEmpty()) {
+            lastApplied = -1;
+            return;
+        }
+        Module module = modules.get(target);
+        if (!(module instanceof IOutput output)) {
+            lastApplied = -1;
+            return;
+        }
+        int value = incomingValue(level, pos);
+        if (value == lastApplied) {
+            return;
+        }
+        lastApplied = value;
+        output.setAnalog(value);
+        AbstractPanelBlockEntity panel = module.parentBlockEntity;
+        if (panel != null) {
+            // Same refresh the panel linker's own redstone linkable does, so the module repaints.
+            panel.networkUpdate(panel.getOrCreate());
+        }
+    }
+
+    /** Strongest signal any cable delivers into {@code pos}, 0 when nothing is connected. */
+    private static int incomingValue(Level level, BlockPos pos) {
+        WireNetworkManager network = WireNetworkManager.get(level);
+        if (network == null) {
+            return 0;
+        }
+        Map<Long, Map<String, Set<WireNetworkNode.WireNetworkSink>>> graph = network.getNetwork();
+        if (graph == null) {
+            return 0;
+        }
+        int best = 0;
+        for (Map.Entry<Long, Map<String, Set<WireNetworkNode.WireNetworkSink>>> sourceEntry : graph.entrySet()) {
+            BlockPos source = BlockPos.of(sourceEntry.getKey());
+            if (source.equals(pos)) {
+                // Our own published channels; reading them back would fight the outputs.
+                continue;
+            }
+            for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> channelEntry
+                    : sourceEntry.getValue().entrySet()) {
+                if (!feeds(channelEntry.getValue(), pos)) {
+                    continue;
+                }
+                best = Math.max(best, channelValue(level, network, source, channelEntry.getKey()));
+            }
+        }
+        return best;
+    }
+
+    /** Whether one of the sinks of a link is {@code pos}. */
+    private static boolean feeds(Set<WireNetworkNode.WireNetworkSink> sinks, BlockPos pos) {
+        for (WireNetworkNode.WireNetworkSink sink : sinks) {
+            BlockPos sinkPos = BlockPos.of(sink.position());
+            if (sinkPos.equals(pos)) {
+                return true;
+            }
+            int facing = sink.direction();
+            if (facing >= 0 && facing < Direction.values().length
+                    && sinkPos.relative(Direction.from3DDataValue(facing)).equals(pos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int channelValue(Level level, WireNetworkManager network, BlockPos source, String channel) {
+        if (WireNetworkManager.WORLD_CHANNEL.equals(channel)) {
+            return clamp(WireNetworkManager.computeWorldSignal(level, source));
+        }
+        Map<String, Integer> signals = network.getSourceSignals(source);
+        if (signals == null) {
+            return 0;
+        }
+        return clamp(signals.getOrDefault(channel, 0));
     }
 
     @Override
@@ -287,6 +419,8 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 aliases.put(oldName, stored.getString(oldName));
             }
         }
+        target = tag.getString(TAG_TARGET);
+        lastApplied = -1;
         if (level != null && level.isClientSide) {
             PanelLinkChannels.store(worldPosition, names);
         }
@@ -300,6 +434,9 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             stored.putString(alias.getKey(), alias.getValue());
         }
         tag.put(TAG_ALIASES, stored);
+        if (!target.isEmpty()) {
+            tag.putString(TAG_TARGET, target);
+        }
     }
 
     private static List<String> readChannels(CompoundTag tag) {
