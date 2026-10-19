@@ -27,6 +27,15 @@ import net.minecraft.world.level.Level;
  * the client and the NBT round trip all use one lookup with no level or
  * dimension bookkeeping: the entity already knows where it is.
  *
+ * <p>Both directions are many-to-many:
+ *
+ * <ul>
+ *   <li>one source channel may feed several modules (splitting a cable);</li>
+ *   <li>one module may listen to several source channels at once, in which case
+ *       the effective value is the <b>largest</b> of them -- the same rule redstone
+ *       uses when two wires meet at one torch.</li>
+ * </ul>
+ *
  * <p>The mapping is persisted in the panel's own block entity data, which also
  * gives client sync for free: the vanilla update tag carries it, so a player who
  * comes into view immediately knows which modules are bound and can draw their
@@ -37,7 +46,7 @@ public final class PanelBindings {
     private static final String TAG_BINDINGS = "dbd:Bindings";
     private static final String TAG_MODULE = "module";
 
-    private static final Map<AbstractPanelBlockEntity, Map<String, PanelModuleBinding>> STORE =
+    private static final Map<AbstractPanelBlockEntity, Map<String, List<PanelModuleBinding>>> STORE =
             Collections.synchronizedMap(new WeakHashMap<>());
 
     /** Last value pushed into each module, so the output is only poked on change. */
@@ -47,10 +56,18 @@ public final class PanelBindings {
     private PanelBindings() {
     }
 
-    public static Map<String, PanelModuleBinding> of(AbstractPanelBlockEntity panel) {
+    /** A deep-enough copy: the lists are immutable snapshots, callers never mutate the store. */
+    public static Map<String, List<PanelModuleBinding>> of(AbstractPanelBlockEntity panel) {
         synchronized (STORE) {
-            Map<String, PanelModuleBinding> bound = STORE.get(panel);
-            return bound == null || bound.isEmpty() ? Map.of() : Map.copyOf(bound);
+            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
+            if (bound == null || bound.isEmpty()) {
+                return Map.of();
+            }
+            Map<String, List<PanelModuleBinding>> copy = new LinkedHashMap<>();
+            for (Map.Entry<String, List<PanelModuleBinding>> entry : bound.entrySet()) {
+                copy.put(entry.getKey(), List.copyOf(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(copy);
         }
     }
 
@@ -58,30 +75,83 @@ public final class PanelBindings {
         return of(panel).isEmpty();
     }
 
-    public static PanelModuleBinding get(AbstractPanelBlockEntity panel, String module) {
+    /** Every source this module listens to. */
+    public static List<PanelModuleBinding> bindings(AbstractPanelBlockEntity panel, String module) {
         synchronized (STORE) {
-            Map<String, PanelModuleBinding> bound = STORE.get(panel);
-            return bound == null ? null : bound.get(module);
-        }
-    }
-
-    public static void put(AbstractPanelBlockEntity panel, String module, PanelModuleBinding binding) {
-        synchronized (STORE) {
-            STORE.computeIfAbsent(panel, key -> new LinkedHashMap<>()).put(module, binding);
-        }
-    }
-
-    public static PanelModuleBinding remove(AbstractPanelBlockEntity panel, String module) {
-        synchronized (STORE) {
-            Map<String, PanelModuleBinding> bound = STORE.get(panel);
+            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
             if (bound == null) {
-                return null;
+                return List.of();
             }
-            PanelModuleBinding old = bound.remove(module);
+            List<PanelModuleBinding> list = bound.get(module);
+            return list == null || list.isEmpty() ? List.of() : List.copyOf(list);
+        }
+    }
+
+    /** First source of a module, or {@code null}. Prefer {@link #bindings} when all matter. */
+    public static PanelModuleBinding get(AbstractPanelBlockEntity panel, String module) {
+        List<PanelModuleBinding> all = bindings(panel, module);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    public static boolean has(AbstractPanelBlockEntity panel, String module, BlockPos source, String channel) {
+        for (PanelModuleBinding binding : bindings(panel, module)) {
+            if (binding.source().equals(source) && binding.channel().equals(channel)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Adds one source to a module. Returns {@code false} if that pair was already there. */
+    public static boolean put(AbstractPanelBlockEntity panel, String module, PanelModuleBinding binding) {
+        synchronized (STORE) {
+            Map<String, List<PanelModuleBinding>> bound = STORE.computeIfAbsent(panel, key -> new LinkedHashMap<>());
+            List<PanelModuleBinding> list = bound.computeIfAbsent(module, key -> new ArrayList<>());
+            for (PanelModuleBinding existing : list) {
+                if (existing.source().equals(binding.source()) && existing.channel().equals(binding.channel())) {
+                    return false;
+                }
+            }
+            list.add(binding);
+            return true;
+        }
+    }
+
+    /** Drops one source from a module, leaving its other sources alone. */
+    public static boolean removeBinding(AbstractPanelBlockEntity panel, String module, BlockPos source, String channel) {
+        synchronized (STORE) {
+            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
+            if (bound == null) {
+                return false;
+            }
+            List<PanelModuleBinding> list = bound.get(module);
+            if (list == null) {
+                return false;
+            }
+            boolean removed = list.removeIf(
+                    binding -> binding.source().equals(source) && binding.channel().equals(channel));
+            if (list.isEmpty()) {
+                bound.remove(module);
+            }
             if (bound.isEmpty()) {
                 STORE.remove(panel);
             }
-            return old;
+            return removed;
+        }
+    }
+
+    /** Drops every source of one module. */
+    public static boolean remove(AbstractPanelBlockEntity panel, String module) {
+        synchronized (STORE) {
+            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
+            if (bound == null) {
+                return false;
+            }
+            List<PanelModuleBinding> old = bound.remove(module);
+            if (bound.isEmpty()) {
+                STORE.remove(panel);
+            }
+            return old != null && !old.isEmpty();
         }
     }
 
@@ -101,16 +171,18 @@ public final class PanelBindings {
     // ---------------------------------------------------------------- persistence
 
     public static void write(AbstractPanelBlockEntity panel, CompoundTag tag) {
-        Map<String, PanelModuleBinding> bound = of(panel);
+        Map<String, List<PanelModuleBinding>> bound = of(panel);
         if (bound.isEmpty()) {
             tag.remove(TAG_BINDINGS);
             return;
         }
         ListTag list = new ListTag();
-        for (Map.Entry<String, PanelModuleBinding> entry : bound.entrySet()) {
-            CompoundTag element = entry.getValue().save();
-            element.putString(TAG_MODULE, entry.getKey());
-            list.add(element);
+        for (Map.Entry<String, List<PanelModuleBinding>> entry : bound.entrySet()) {
+            for (PanelModuleBinding binding : entry.getValue()) {
+                CompoundTag element = binding.save();
+                element.putString(TAG_MODULE, entry.getKey());
+                list.add(element);
+            }
         }
         tag.put(TAG_BINDINGS, list);
     }
@@ -121,12 +193,24 @@ public final class PanelBindings {
             return;
         }
         ListTag list = tag.getList(TAG_BINDINGS, Tag.TAG_COMPOUND);
-        Map<String, PanelModuleBinding> bound = new LinkedHashMap<>();
+        Map<String, List<PanelModuleBinding>> bound = new LinkedHashMap<>();
         for (int i = 0; i < list.size(); i++) {
             CompoundTag element = list.getCompound(i);
             String module = element.getString(TAG_MODULE);
-            if (!module.isEmpty()) {
-                bound.put(module, PanelModuleBinding.load(element));
+            if (module.isEmpty()) {
+                continue;
+            }
+            PanelModuleBinding binding = PanelModuleBinding.load(element);
+            List<PanelModuleBinding> sources = bound.computeIfAbsent(module, key -> new ArrayList<>());
+            boolean duplicate = false;
+            for (PanelModuleBinding existing : sources) {
+                if (existing.source().equals(binding.source()) && existing.channel().equals(binding.channel())) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                sources.add(binding);
             }
         }
         synchronized (STORE) {
@@ -140,7 +224,7 @@ public final class PanelBindings {
 
     // -------------------------------------------------------------------- delivery
 
-    /** Server tick: push each bound wire value into its module. */
+    /** Server tick: push the effective wire value into every bound module. */
     public static void deliver() {
         List<AbstractPanelBlockEntity> snapshot = new ArrayList<>(panels());
         for (AbstractPanelBlockEntity panel : snapshot) {
@@ -152,32 +236,44 @@ public final class PanelBindings {
             if (!(level instanceof ServerLevel serverLevel)) {
                 continue;
             }
-            Map<String, PanelModuleBinding> bound = of(panel);
+            Map<String, List<PanelModuleBinding>> bound = of(panel);
             if (bound.isEmpty()) {
                 continue;
             }
-            boolean dropped = false;
-            for (Map.Entry<String, PanelModuleBinding> entry : bound.entrySet()) {
+            boolean dirty = false;
+            for (Map.Entry<String, List<PanelModuleBinding>> entry : bound.entrySet()) {
                 String moduleName = entry.getKey();
-                PanelModuleBinding binding = entry.getValue();
                 Module module = panel.getModule(moduleName);
                 if (!(module instanceof IOutput output)) {
                     // Module removed, renamed or simply unable to receive: drop it.
-                    remove(panel, moduleName);
-                    dropped = true;
+                    if (remove(panel, moduleName)) {
+                        dirty = true;
+                    }
                     continue;
                 }
-                if (!WireNetworkManager.hasConnection(serverLevel, binding.source(), binding.sink(),
-                        binding.face(), binding.channel())) {
-                    // The cable is gone (cut, replaced or the source removed).
+                int best = 0;
+                boolean live = false;
+                boolean pruned = false;
+                for (PanelModuleBinding binding : entry.getValue()) {
+                    if (!WireNetworkManager.hasConnection(serverLevel, binding.source(), binding.sink(),
+                            binding.face(), binding.channel())) {
+                        // This cable is gone (cut, replaced or the source removed).
+                        if (removeBinding(panel, moduleName, binding.source(), binding.channel())) {
+                            pruned = true;
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    live = true;
+                    best = Math.max(best, valueOf(serverLevel, binding));
+                }
+                if (live) {
+                    apply(panel, moduleName, output, best);
+                } else if (pruned) {
                     apply(panel, moduleName, output, 0);
-                    remove(panel, moduleName);
-                    dropped = true;
-                    continue;
                 }
-                apply(panel, moduleName, output, valueOf(serverLevel, binding));
             }
-            if (dropped) {
+            if (dirty) {
                 markDirty(panel);
             }
         }
@@ -195,13 +291,13 @@ public final class PanelBindings {
         panel.blockChanged();
     }
 
-    /** Drop a binding and stop the module from holding the last value. */
+    /** Drop every source of a module and stop it from holding the last value. */
     public static boolean unbind(AbstractPanelBlockEntity panel, String moduleName) {
         Module module = panel.getModule(moduleName);
         if (module instanceof IOutput output) {
             apply(panel, moduleName, output, 0);
         }
-        boolean removed = remove(panel, moduleName) != null;
+        boolean removed = remove(panel, moduleName);
         if (removed) {
             markDirty(panel);
         }
@@ -211,10 +307,12 @@ public final class PanelBindings {
     /** Every module on this panel that is fed by the given source channel. */
     public static List<String> boundTo(AbstractPanelBlockEntity panel, BlockPos source, String channel) {
         List<String> out = new ArrayList<>();
-        for (Map.Entry<String, PanelModuleBinding> entry : of(panel).entrySet()) {
-            PanelModuleBinding binding = entry.getValue();
-            if (binding.source().equals(source) && binding.channel().equals(channel)) {
-                out.add(entry.getKey());
+        for (Map.Entry<String, List<PanelModuleBinding>> entry : of(panel).entrySet()) {
+            for (PanelModuleBinding binding : entry.getValue()) {
+                if (binding.source().equals(source) && binding.channel().equals(channel)) {
+                    out.add(entry.getKey());
+                    break;
+                }
             }
         }
         return out;
@@ -226,7 +324,8 @@ public final class PanelBindings {
     }
 
     /**
-     * Drop every module fed by one source channel.
+     * Drop one source channel from every module it feeds, leaving other sources of
+     * those modules intact.
      *
      * <p>This is the only way to really get rid of a cable: a cable can feed several
      * modules at once, so cutting it has to mean "release all of them".
@@ -234,9 +333,18 @@ public final class PanelBindings {
     public static int unbindChannel(AbstractPanelBlockEntity panel, BlockPos source, String channel) {
         int dropped = 0;
         for (String moduleName : boundTo(panel, source, channel)) {
-            if (unbind(panel, moduleName)) {
+            if (removeBinding(panel, moduleName, source, channel)) {
                 dropped++;
+                if (bindings(panel, moduleName).isEmpty()) {
+                    Module module = panel.getModule(moduleName);
+                    if (module instanceof IOutput output) {
+                        apply(panel, moduleName, output, 0);
+                    }
+                }
             }
+        }
+        if (dropped > 0) {
+            markDirty(panel);
         }
         return dropped;
     }

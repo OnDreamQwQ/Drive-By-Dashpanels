@@ -6,7 +6,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 
-import io.github.ondreamqwq.dbd.content.PanelBindings;
+import io.github.ondreamqwq.dbd.client.WireSelection;
 import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import moth.boxxed.panels.api.panel.AbstractPanelRenderer;
@@ -23,8 +23,6 @@ import net.minecraft.client.renderer.MultiBufferSource;
 @Mixin(value = AbstractPanelRenderer.class, remap = false)
 public abstract class AbstractPanelRendererMixin {
 
-    private static final int WIRED_COLOR = 0xFFFFC400;
-
     @Redirect(
             method = "renderModules",
             at = @At(
@@ -38,8 +36,9 @@ public abstract class AbstractPanelRendererMixin {
     private void dbd$outlineWiredModules(Module module, AbstractPanelBlockEntity panel, PoseStack pose,
             float partialTick, MultiBufferSource buffer, int light, int overlay) {
         module.render(panel, pose, partialTick, buffer, light, overlay);
-        if (PanelBindings.get(panel, module.getName()) != null) {
-            module.renderOutline(pose, buffer, partialTick, WIRED_COLOR);
+        int color = WireSelection.frameColor(panel, module);
+        if (color != 0) {
+            module.renderOutline(pose, buffer, partialTick, color);
         }
     }
 }

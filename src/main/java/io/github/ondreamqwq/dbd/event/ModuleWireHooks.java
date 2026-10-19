@@ -65,8 +65,7 @@ public final class ModuleWireHooks {
             say(player, "模块 " + moduleName + " 不接收信号（只有指示灯泡、数码管这类输出模块可以）");
             return;
         }
-        PanelModuleBinding previous = PanelBindings.get(panel, moduleName);
-        if (previous != null && previous.source().equals(source) && previous.channel().equals(channel)) {
+        if (PanelBindings.has(panel, moduleName, source, channel)) {
             say(player, "模块 " + moduleName + " 已经接在 " + channel + " 上了");
             return;
         }
@@ -107,13 +106,18 @@ public final class ModuleWireHooks {
             }
             return;
         }
-        PanelModuleBinding current = PanelBindings.get(panel, moduleName);
-        boolean sameChannel = current != null
-                && current.source().equals(source)
-                && current.channel().equals(channel);
-        if (sameChannel) {
-            PanelBindings.unbind(panel, moduleName);
-            say(player, "已解除模块 " + moduleName + " 的线缆连接");
+        boolean wasBound = PanelBindings.has(panel, moduleName, source, channel);
+        if (wasBound) {
+            // Release only this cable; the module may still listen to other sources.
+            PanelBindings.removeBinding(panel, moduleName, source, channel);
+            PanelBindings.markDirty(panel);
+            int left = PanelBindings.bindings(panel, moduleName).size();
+            if (left == 0) {
+                PanelBindings.unbind(panel, moduleName);
+                say(player, "已解除模块 " + moduleName + " 的线缆连接");
+            } else {
+                say(player, "已解除模块 " + moduleName + " 的这条线缆（还剩 " + left + " 个信号源）");
+            }
         } else {
             if (!(panel.getModule(moduleName) instanceof IOutput)) {
                 say(player, "模块 " + moduleName + " 不接收信号（只有指示灯泡、数码管这类输出模块可以）");
@@ -122,11 +126,14 @@ public final class ModuleWireHooks {
             bind(panel, moduleName, new PanelModuleBinding(source, channel, sink, direction));
         }
         if (!keepAlive(serverLevel, panel, source, sink, direction, channel)) {
-            PanelBindings.unbind(panel, moduleName);
+            if (!wasBound) {
+                PanelBindings.removeBinding(panel, moduleName, source, channel);
+                PanelBindings.markDirty(panel);
+            }
             say(player, "线缆连接已断开");
             return;
         }
-        if (!sameChannel) {
+        if (!wasBound) {
             say(player, describe(panel, source, channel, moduleName));
         }
     }
@@ -153,7 +160,14 @@ public final class ModuleWireHooks {
     private static String describe(AbstractPanelBlockEntity panel, BlockPos source, String channel,
             String moduleName) {
         int count = PanelBindings.boundTo(panel, source, channel).size();
-        String extra = count > 1 ? "（这个频道同时供给 " + count + " 个模块）" : "";
+        int sources = PanelBindings.bindings(panel, moduleName).size();
+        StringBuilder extra = new StringBuilder();
+        if (count > 1) {
+            extra.append("（这个频道同时供给 ").append(count).append(" 个模块）");
+        }
+        if (sources > 1) {
+            extra.append("（这个模块同时监听 ").append(sources).append(" 个信号源，取最大值）");
+        }
         return "模块 " + moduleName + "  <-  " + channel + extra;
     }
 
