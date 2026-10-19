@@ -10,6 +10,8 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
@@ -18,6 +20,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.joml.Matrix4f;
 
@@ -33,13 +37,16 @@ import org.joml.Matrix4f;
 public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0xFF0E1116;
-    private static final float SCALE_FRACTION = 0.62F;
+    private static final float FILL = 0.86F;
 
     private final BlockPos panelPos;
     private final BlockPos receiverPos;
 
     private AbstractPanelBlockEntity panel;
+    /** Module space to screen: used for the click test and for the highlight. */
     private Matrix4f camera;
+    /** Block space to screen: used for the block model and the block entity renderer. */
+    private Matrix4f renderCamera;
 
     private PanelRemoteScreen(BlockPos panelPos, BlockPos receiverPos) {
         super(Component.translatable("gui.drive_by_dashpanels.remote.title"));
@@ -60,11 +67,16 @@ public class PanelRemoteScreen extends Screen {
         Level level = Minecraft.getInstance().level;
         BlockEntity blockEntity = level == null ? null : level.getBlockEntity(panelPos);
         panel = blockEntity instanceof AbstractPanelBlockEntity found ? found : null;
-        camera = panel == null ? null : PanelProjection.matrix(
-                PanelProjection.normal(panel),
-                width / 2.0F,
-                height / 2.0F,
-                Math.min(width, height) * SCALE_FRACTION);
+        if (panel == null) {
+            camera = null;
+            renderCamera = null;
+            return;
+        }
+        AABB bounds = PanelProjection.bounds(panel);
+        float scale = PanelProjection.fitScale(bounds, width * FILL, height * FILL);
+        camera = PanelProjection.camera(bounds, width / 2.0F, height / 2.0F, scale);
+        renderCamera = new Matrix4f(camera)
+                .mul(new Matrix4f(PanelProjection.clipping(panel)).invert());
     }
 
     @Override
@@ -77,7 +89,7 @@ public class PanelRemoteScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, BACKDROP);
 
-        if (panel == null || camera == null) {
+        if (panel == null || camera == null || renderCamera == null) {
             graphics.drawCenteredString(font,
                     Component.translatable("gui.drive_by_dashpanels.remote.unavailable"),
                     width / 2, height / 2 - 4, 0xFFCC5555);
@@ -92,32 +104,58 @@ public class PanelRemoteScreen extends Screen {
     private void drawPanel(GuiGraphics graphics, float partialTick, Module hovered) {
         Minecraft minecraft = Minecraft.getInstance();
         MultiBufferSource.BufferSource buffer = minecraft.renderBuffers().bufferSource();
-        BlockEntityRenderer<AbstractPanelBlockEntity> renderer =
-                minecraft.getBlockEntityRenderDispatcher().getRenderer(panel);
-
         PoseStack pose = graphics.pose();
-        pose.pushPose();
-        pose.mulPose(camera);
 
         RenderSystem.enableDepthTest();
         RenderSystem.depthMask(false);
         RenderSystem.disableCull();
 
+        pose.pushPose();
+        pose.mulPose(renderCamera);
+        // The board itself. Dashpanels renders it as a normal block model, not as part of the block
+        // entity renderer, so without this the screen shows modules floating in empty space.
+        minecraft.getBlockRenderer().renderSingleBlock(
+                panel.getBlockState(), pose, buffer, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+        flush(buffer);
+
+        BlockEntityRenderer<AbstractPanelBlockEntity> renderer =
+                minecraft.getBlockEntityRenderDispatcher().getRenderer(panel);
         if (renderer != null) {
             renderer.render(panel, partialTick, pose, buffer,
                     LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
         }
-        buffer.endBatch();
+        flush(buffer);
+        pose.popPose();
 
         if (hovered != null) {
+            // Module space plus the module's own offset inside it: the same pose the panel renderer
+            // hands to renderOutline when it draws its hover frame.
+            pose.pushPose();
+            pose.mulPose(camera);
+            pose.translate(hovered.getPos().x / 16.0D, 0.0D, hovered.getPos().y / 16.0D);
             hovered.renderOutline(pose, buffer, partialTick, 0xFFFFC400);
-            buffer.endBatch();
+            flush(buffer);
+            pose.popPose();
         }
 
         RenderSystem.enableCull();
         RenderSystem.depthMask(true);
         RenderSystem.disableDepthTest();
-        pose.popPose();
+    }
+
+    /**
+     * Flush every render type a panel might have written to.
+     *
+     * <p>{@code BufferSource.endBatch()} only ends the type that was started last, which is why the
+     * first attempt at this screen showed fragments: everything but the final type was still sitting
+     * in the buffers when the pose was restored.
+     */
+    private static void flush(MultiBufferSource.BufferSource buffer) {
+        buffer.endBatch(RenderType.solid());
+        buffer.endBatch(RenderType.cutoutMipped());
+        buffer.endBatch(RenderType.cutout());
+        buffer.endBatch(RenderType.translucent());
+        buffer.endBatch(RenderType.lines());
     }
 
     private void drawOverlay(GuiGraphics graphics, Module hovered) {
