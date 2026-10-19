@@ -32,7 +32,12 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.ByteTag;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.DoubleTag;
+import net.minecraft.nbt.FloatTag;
+import net.minecraft.nbt.NumericTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
@@ -74,11 +79,11 @@ public class PanelRemoteScreen extends Screen {
     private static final int HIGHLIGHT = 0xFFFFC400;
     private static final int INFO_BACKDROP = 0xD8101014;
     private static final int INFO_EDGE = 0xFF585858;
+    private static final int VALUE_COLOR = 0xFF7FE0A0;
     private static final float ZOOM_STEP = 0.12F;
     private static final float MIN_ZOOM = 0.5F;
     private static final float MAX_ZOOM = 3.0F;
     private static final float DRAG_SCALE = 0.55F;
-    private static final float MAX_PITCH = 80.0F;
     private static final double CLICK_SLOP = 3.0D;
     /** Mouse travel handed to a hold interaction per scroll notch, in the same units a drag uses. */
     private static final double SCROLL_NOTCH = 40.0D;
@@ -395,47 +400,133 @@ public class PanelRemoteScreen extends Screen {
 
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
         Hit hit = holding != null ? holdHit : (dragging && moved ? null : hitAt(mouseX, mouseY));
+        // The panels are real 3D geometry with depth written, so anything drawn at the GUI depth loses to
+        // them. Flush them out first and turn the depth test off, otherwise the outline and the name box
+        // land behind the model.
+        graphics.flush();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
         if (hit != null) {
             // The rectangle is measured again every frame instead of reusing the one stored in the hit,
             // so the outline keeps hugging the module while the view is zoomed or turned.
             int[] rect = currentRect(hit);
+            Module module = liveModule(hit);
             graphics.pose().pushPose();
             graphics.pose().translate(0.0F, 0.0F, 400.0F);
             graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
-            drawInfoBox(graphics, rect, hit.module());
+            drawInfoBox(graphics, rect, module);
         }
         Component hint = holding != null
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
                 : Component.translatable("gui.drive_by_dashpanels.remote.hint");
         graphics.drawCenteredString(font, hint, width / 2, height - 16, HINT_COLOR);
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
     }
 
     /**
-     * Name plus reading, drawn by us right above the module. Dashpanels' own tooltip was tried first, but
-     * it is pinned to the screen centre and fades through a static opacity field that vanilla's HUD pass
-     * keeps pulling back to zero, so it never showed up over this screen.
+     * The module object the panel holds right now. Every block entity update rebuilds the module map from
+     * the synced tag, so a hit stored when the click happened points at an object that no longer carries
+     * the current value; looking the module up by name gives the one the renderer also draws.
+     */
+    private static Module liveModule(Hit hit) {
+        Module fresh = hit.panel().getModule(hit.module().getName());
+        return fresh != null ? fresh : hit.module();
+    }
+
+    /**
+     * Name, a live reading and how the module is being driven, drawn by us right above the module.
+     * Dashpanels' own tooltip was tried first, but it is pinned to the screen centre and fades through a
+     * static opacity field that vanilla's HUD pass keeps pulling back to zero, so it never showed up here.
      */
     private void drawInfoBox(GuiGraphics graphics, int[] rect, Module module) {
         String name = module.getName();
         String reading = readValue(module);
-        int textWidth = Math.max(font.width(name), reading == null ? 0 : font.width(reading));
-        int boxWidth = textWidth + 8;
-        int boxHeight = reading == null ? 13 : 22;
+        String state = holding == null ? null
+                : Component.translatable("gui.drive_by_dashpanels.remote.state").getString();
+        // Dashpanels has no cursor-shape hook: the only pointer state a hold exposes is whether it wants
+        // the crosshair hidden. Mirror that flag in the box so the module's own hint is not lost on a screen.
+        if (state != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
+            state = state + "  " + Component.translatable("gui.drive_by_dashpanels.remote.pointer").getString();
+        }
+        int widest = Math.max(font.width(name), reading == null ? 0 : font.width(reading));
+        if (state != null) {
+            widest = Math.max(widest, font.width(state));
+        }
+        int boxWidth = widest + 8;
+        int boxHeight = 13 + (reading == null ? 0 : 9) + (state == null ? 0 : 9);
         int boxX = Mth.clamp(rect[0] + rect[2] / 2 - boxWidth / 2, 2, width - boxWidth - 2);
         int boxY = Mth.clamp(rect[1] - boxHeight - 4, 2, height - boxHeight - 2);
         graphics.flush();
         graphics.fill(boxX, boxY, boxX + boxWidth, boxY + boxHeight, INFO_BACKDROP);
         graphics.renderOutline(boxX, boxY, boxWidth, boxHeight, INFO_EDGE);
-        graphics.drawString(font, name, boxX + 4, boxY + 3, NAME_COLOR, false);
+        graphics.drawString(font, name, boxX + 4, boxY + 3, holding != null ? HOLD_COLOR : NAME_COLOR, false);
+        int line = boxY + 12;
         if (reading != null) {
-            graphics.drawString(font, reading, boxX + 4, boxY + 12, NAME_COLOR, false);
+            graphics.drawString(font, reading, boxX + 4, line, VALUE_COLOR, false);
+            line += 9;
+        }
+        if (state != null) {
+            graphics.drawString(font, state, boxX + 4, line, HINT_COLOR, false);
         }
     }
 
-    /** The analog reading of an input module, when it publishes one; drives the number under the name. */
+    /**
+     * The reading of a module, taken from the module's own saved tag the way the panel writes it to disk -
+     * every module that carries a value implements {@code saveData}, so this covers modules from other
+     * mods too. Falls back to the analog input value for modules that keep their state elsewhere.
+     */
     private static String readValue(Module module) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level != null) {
+            CompoundTag tag = new CompoundTag();
+            try {
+                module.saveData(tag, minecraft.level.registryAccess());
+            } catch (RuntimeException ignored) {
+                return analog(module);
+            }
+            StringBuilder builder = new StringBuilder();
+            int shown = 0;
+            for (String key : tag.getAllKeys()) {
+                if (shown >= 3) {
+                    break;
+                }
+                String text = describe(key, tag.get(key));
+                if (text == null) {
+                    continue;
+                }
+                if (shown > 0) {
+                    builder.append("  ");
+                }
+                builder.append(text);
+                shown++;
+            }
+            if (!builder.isEmpty()) {
+                return builder.toString();
+            }
+        }
+        return analog(module);
+    }
+
+    private static String describe(String key, Tag value) {
+        if (value instanceof FloatTag number) {
+            return key + " " + String.format(java.util.Locale.ROOT, "%.2f", number.getAsDouble());
+        }
+        if (value instanceof DoubleTag number) {
+            return key + " " + String.format(java.util.Locale.ROOT, "%.2f", number.getAsDouble());
+        }
+        if (value instanceof ByteTag flag) {
+            return key + (flag.getAsByte() == 0 ? ' ' + "off" : ' ' + "on");
+        }
+        if (value instanceof NumericTag number) {
+            return key + " " + number.getAsInt();
+        }
+        return null;
+    }
+
+    private static String analog(Module module) {
         if (module instanceof IInput input) {
             return Integer.toString(input.getAnalog());
         }
@@ -547,7 +638,9 @@ public class PanelRemoteScreen extends Screen {
         }
         // Reversed on purpose: dragging the view should push the panel the way the hand moves.
         view[0] = Mth.wrapDegrees(view[0] - (float) dragX * DRAG_SCALE);
-        view[1] = Mth.clamp(view[1] - (float) dragY * DRAG_SCALE, -MAX_PITCH, MAX_PITCH);
+        // No pitch limit: a ceiling panel sits above the module plane, so its modules only come into view
+        // once the view is turned well past the horizon and over the top.
+        view[1] -= (float) dragY * DRAG_SCALE;
         return true;
     }
 
@@ -644,13 +737,10 @@ public class PanelRemoteScreen extends Screen {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         }
 
-        // Ctrl+wheel zooms, Alt+wheel turns the module under the cursor, a bare wheel does nothing.
+        // Ctrl+wheel zooms; a bare wheel over a module adjusts it, the same way it does on the panel.
         if (hasControlDown()) {
             zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
             layout();
-            return true;
-        }
-        if (!hasAltDown()) {
             return true;
         }
 
@@ -658,9 +748,13 @@ public class PanelRemoteScreen extends Screen {
         if (hit == null) {
             return true;
         }
-        // Prefer the module's own hold interaction: it knows which tag and which unit it speaks, so the
-        // wheel goes through exactly the same path a drag would. Only modules that expose a discrete
-        // wheel step and never start a hold fall through to the packet below.
+        // Modules that take discrete wheel steps (Dashpanels Extra's scroll wheel) get the wheel first:
+        // they move a whole notch by mutating their own position and having the server apply a tag, which
+        // is exactly what their own client handler does - minus the screen check that stops it in a GUI.
+        if (scrollModule(hit.module(), scrollY)) {
+            return true;
+        }
+        // Everything else with a value is driven by a hold interaction, which speaks in mouse deltas.
         if (scrollMode && holdHit != null && holdHit.module() == hit.module()) {
             feedScroll(scrollY);
             return true;
@@ -670,9 +764,7 @@ public class PanelRemoteScreen extends Screen {
         if (holding != null) {
             scrollMode = true;
             feedScroll(scrollY);
-            return true;
         }
-        scrollModule(hit.module(), scrollY);
         return true;
     }
 
