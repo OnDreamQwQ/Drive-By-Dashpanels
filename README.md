@@ -6,7 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/OnDreamQwQ/Drive-By-Dashpanels?label=%E4%B8%8B%E8%BD%BD&color=green)](https://github.com/OnDreamQwQ/Drive-By-Dashpanels/releases/latest)
 
-- **0.3.0** —— 当前正式版：线控 ⇄ 面板双向桥接 + 面板遥控终端
+- **0.3.0** —— 当前正式版：线控 ⇄ 面板双向桥接 + 面板遥控终端 ⚠️此版本的面板遥控接收器可能导致附近的方块变成幽灵方块
 
 ## 使用方法
 
@@ -99,7 +99,7 @@ libs/
 
 ## ToDo
 
-- 自己做一个模型
+- ~~自己做一个模型~~ 已完成
 - ~~添加选择ui~~ 已完成
 - ~~线控对模块充能~~ 已完成
 - ~~制作远程控制终端~~ 已完成：面板遥控器 + 面板遥控接收器
