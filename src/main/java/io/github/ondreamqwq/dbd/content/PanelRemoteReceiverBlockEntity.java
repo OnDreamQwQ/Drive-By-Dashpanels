@@ -5,9 +5,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import moth.boxxed.panels.api.network.ModulesNetwork;
+import moth.boxxed.panels.api.network.ModulesNetworkManager;
 import moth.boxxed.panels.api.network.ModulesNetworkMember;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
+import moth.boxxed.panels.util.BaseBlockEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.LongArrayTag;
@@ -17,16 +20,23 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * A receiver for {@link PanelRemoteItem}: it joins the Dashpanels network like the panel linker does,
- * and remembers every panel it serves.
+ * A receiver for {@link PanelRemoteItem}: it remembers which panels the remote should project.
  *
- * <p>The panels are decided on the server (a client-side member never gets a network - see
- * {@code ModulesNetworkManager.handleAddingMember}, which returns immediately on a client) and then
- * pushed down through the vanilla block-entity update tag. The client needs them because the remote
- * screen renders the real panel block entities: that is the whole point of the projection, and it is
- * also why the terminal only works while the receiver's chunk is loaded on the client.
+ * <p><b>It is deliberately not a {@code ModulesNetworkMember}.</b> Ledgering our block into
+ * Dashpanels' network makes the game run its owning network's split/merge bookkeeping the moment this
+ * block is broken: {@code ModulesNetwork.removeMember} rebuilds one candidate network per remaining
+ * member and pushes {@code networkUpdate} down all of them, which re-sends block entity data for every
+ * panel. With a receiver, a cable and a row of panels on one net that turned into a storm of block
+ * updates across the whole row - break progress kept resetting (blocks looked unbreakable) and
+ * right-clicking made the client re-sync (blocks appeared to vanish). A receiver contributes no
+ * modules, so it has no business being a member: this class only *reads* the network through whichever
+ * neighbour is a real member.
+ *
+ * <p>The panels are resolved on the server and pushed down through the vanilla block entity update
+ * tag, because the remote screen renders the real panel block entities and therefore needs them on the
+ * client as well.
  */
-public class PanelRemoteReceiverBlockEntity extends ModulesNetworkMember {
+public class PanelRemoteReceiverBlockEntity extends BaseBlockEntity {
 
     /** NBT key for the served panels inside the block-entity update tag. */
     public static final String TAG_PANELS = "dbd:panels";
@@ -59,7 +69,7 @@ public class PanelRemoteReceiverBlockEntity extends ModulesNetworkMember {
         if (level.isClientSide) {
             return;
         }
-        List<BlockPos> found = nearbyPanels(pos);
+        List<BlockPos> found = nearbyPanels(level, pos);
         if (!found.equals(panels)) {
             panels = found;
             setChanged();
@@ -68,24 +78,39 @@ public class PanelRemoteReceiverBlockEntity extends ModulesNetworkMember {
     }
 
     /**
-     * Every panel on this receiver's network, nearest first.
+     * Every panel on the network this block touches, nearest first.
      *
-     * <p>The order is by distance rather than by member iteration order, so the row of panels in the
+     * <p>The network is found by asking a neighbouring member, never by joining one - see the class
+     * comment for why. Order is by distance rather than by member iteration order, so the row in the
      * remote screen does not reshuffle when a member is added or removed.
      */
-    private List<BlockPos> nearbyPanels(BlockPos self) {
-        ModulesNetwork network = getOrCreate();
+    private static List<BlockPos> nearbyPanels(Level level, BlockPos self) {
+        ModulesNetwork network = networkAt(level, self);
         if (network == null) {
             return List.of();
         }
         List<BlockPos> found = new ArrayList<>();
-        for (ModulesNetworkMember member : network.members) {
-            if (member instanceof AbstractPanelBlockEntity panel) {
+        // Copy first: the panel's own tick may add members to this very set.
+        for (ModulesNetworkMember member : List.copyOf(network.members)) {
+            if (member instanceof AbstractPanelBlockEntity panel && !panel.isRemoved()) {
                 found.add(panel.getBlockPos());
             }
         }
         found.sort(Comparator.comparingDouble(self::distSqr));
         return List.copyOf(found);
+    }
+
+    /** The network of any neighbouring Dashpanels member, or {@code null} when there is none. */
+    private static ModulesNetwork networkAt(Level level, BlockPos self) {
+        for (Direction side : Direction.values()) {
+            if (level.getBlockEntity(self.relative(side)) instanceof ModulesNetworkMember member) {
+                ModulesNetwork network = ModulesNetworkManager.getNetwork(member);
+                if (network != null) {
+                    return network;
+                }
+            }
+        }
+        return null;
     }
 
     @Override
@@ -120,4 +145,3 @@ public class PanelRemoteReceiverBlockEntity extends ModulesNetworkMember {
     }
 
 }
-

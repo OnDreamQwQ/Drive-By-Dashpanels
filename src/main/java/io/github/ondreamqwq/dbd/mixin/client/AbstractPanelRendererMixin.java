@@ -75,21 +75,28 @@ public abstract class AbstractPanelRendererMixin {
     private void dbd$outlineWiredModules(Module module, AbstractPanelBlockEntity panel, PoseStack pose,
             float partialTick, MultiBufferSource buffer, int light, int overlay) {
         module.render(panel, pose, partialTick, buffer, light, overlay);
-        int color = WireSelection.frameColor(panel, module);
-        if (color == 0) {
-            return;
+        // Our frame is decoration. A module from another mod can hand back anything from getVoxelShape,
+        // and a throw in here would abort the whole chunk-section rebuild, so it is fenced off: a broken
+        // outline must never turn a panel into a ghost block.
+        try {
+            int color = WireSelection.frameColor(panel, module);
+            if (color == 0) {
+                return;
+            }
+
+            AABB bounds = module.getVoxelShape().bounds();
+            double cx = (bounds.minX + bounds.maxX) / 2.0D;
+            double cy = (bounds.minY + bounds.maxY) / 2.0D;
+            double cz = (bounds.minZ + bounds.maxZ) / 2.0D;
+
+            pose.pushPose();
+            pose.translate(cx, cy, cz);
+            pose.scale(INFLATE, INFLATE, INFLATE);
+            pose.translate(-cx, -cy, -cz);
+            module.renderOutline(pose, buffer, partialTick, color);
+            pose.popPose();
+        } catch (RuntimeException | LinkageError ignored) {
+            // see above: never let decoration take the renderer down with it
         }
-
-        AABB bounds = module.getVoxelShape().bounds();
-        double cx = (bounds.minX + bounds.maxX) / 2.0D;
-        double cy = (bounds.minY + bounds.maxY) / 2.0D;
-        double cz = (bounds.minZ + bounds.maxZ) / 2.0D;
-
-        pose.pushPose();
-        pose.translate(cx, cy, cz);
-        pose.scale(INFLATE, INFLATE, INFLATE);
-        pose.translate(-cx, -cy, -cz);
-        module.renderOutline(pose, buffer, partialTick, color);
-        pose.popPose();
     }
 }
