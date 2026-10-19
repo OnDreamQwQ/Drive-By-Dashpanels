@@ -4,9 +4,11 @@ import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
+import io.github.ondreamqwq.dbd.DbdConfig;
+import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import io.github.ondreamqwq.dbd.net.TerminalClickPacket;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import moth.boxxed.panels.content.panel.ceiling.CeilingPanelBlockEntity;
@@ -34,14 +36,14 @@ import org.joml.Quaternionf;
 import org.joml.Vector4f;
 
 /**
- * The screen behind the panel remote: the panel itself, drawn through an orthographic camera that
- * looks at its working face from 45 degrees off the normal.
+ * The screen behind the panel remote: every panel the receiver serves, drawn through an orthographic
+ * camera that looks at their working faces from 45 degrees off the normal.
  *
- * <p>The pose chain is copied from Dashpanels' own panel renderer (and from the "panel viewer"
- * module in Dashpanels Extra, which is a working reference for drawing a panel inside a screen):
- * cancel the block's mounting, then replay {@code renderTransform} and
- * {@code getIndividualModuleTransform} for the modules. Hand rolling that transform is what made the
- * first two attempts show nothing, or one oversized face.
+ * <p>The pose chain is copied from Dashpanels' own panel renderer (and from the "panel viewer" module
+ * in Dashpanels Extra, which is a working reference for drawing a panel inside a screen): cancel the
+ * block's mounting, then replay {@code renderTransform} and {@code getIndividualModuleTransform} for
+ * the modules. The camera tilt is applied <em>after</em> the mounting is cancelled, so it is the same
+ * tilt for a floor, wall or ceiling panel.
  *
  * <p>There is no way to read a module's current value through the public API, so this screen shows
  * the modules the way the panel shows them instead of inventing a control for each one. Clicking a
@@ -54,45 +56,52 @@ public class PanelRemoteScreen extends Screen {
     private static final int NAME_COLOR = 0xFFFFFFFF;
     private static final int HINT_COLOR = 0xFF9A9A9A;
     private static final int HIGHLIGHT = 0xFFFFC400;
-    /** Camera tilt off the panel's working face, in degrees. */
-    private static final float TILT = 45.0F;
-    /** How much of the shorter screen axis the panel may take. */
-    private static final float FILL = 0.78F;
+    private static final float ZOOM_STEP = 0.12F;
+    private static final float MIN_ZOOM = 0.5F;
+    private static final float MAX_ZOOM = 3.0F;
 
-    private final BlockPos panelPos;
     private final BlockPos receiverPos;
 
-    private AbstractPanelBlockEntity panel;
-    private int panelLeft;
-    private int panelTop;
-    private int panelWidth;
-    private int panelHeight;
+    private List<AbstractPanelBlockEntity> panels = List.of();
+    private float zoom = 1.0F;
+    private int cell;
 
-    private PanelRemoteScreen(BlockPos panelPos, BlockPos receiverPos) {
+    private PanelRemoteScreen(BlockPos receiverPos) {
         super(Component.translatable("gui.drive_by_dashpanels.remote.title"));
-        this.panelPos = panelPos;
         this.receiverPos = receiverPos;
     }
 
-    public static void open(BlockPos panelPos, BlockPos receiverPos) {
+    public static void open(BlockPos receiverPos) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.screen instanceof PanelRemoteScreen open && open.panelPos.equals(panelPos)) {
+        if (minecraft.screen instanceof PanelRemoteScreen open && open.receiverPos.equals(receiverPos)) {
             return;
         }
-        minecraft.setScreen(new PanelRemoteScreen(panelPos, receiverPos));
+        minecraft.setScreen(new PanelRemoteScreen(receiverPos));
     }
 
     @Override
     protected void init() {
         Level level = Minecraft.getInstance().level;
-        BlockEntity blockEntity = level == null ? null : level.getBlockEntity(panelPos);
-        panel = blockEntity instanceof AbstractPanelBlockEntity found ? found : null;
+        BlockEntity blockEntity = level == null ? null : level.getBlockEntity(receiverPos);
+        List<AbstractPanelBlockEntity> found = new ArrayList<>();
+        if (blockEntity instanceof PanelRemoteReceiverBlockEntity receiver) {
+            for (BlockPos pos : receiver.panels()) {
+                if (level.getBlockEntity(pos) instanceof AbstractPanelBlockEntity panel) {
+                    found.add(panel);
+                }
+            }
+        }
+        panels = List.copyOf(found);
+        layout();
+    }
 
-        int side = Math.round(Math.min(width, height) * FILL);
-        panelWidth = side;
-        panelHeight = side;
-        panelLeft = (width - side) / 2;
-        panelTop = (height - side) / 2;
+    private void layout() {
+        if (panels.isEmpty()) {
+            cell = Math.round(Math.min(width, height) * 0.62F);
+            return;
+        }
+        float base = Math.min(width * 0.92F / panels.size(), height * 0.86F);
+        cell = Math.max(24, Math.round(base * zoom));
     }
 
     @Override
@@ -105,26 +114,30 @@ public class PanelRemoteScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, BACKDROP);
 
-        if (panel == null) {
+        if (panels.isEmpty()) {
             graphics.drawCenteredString(font,
                     Component.translatable("gui.drive_by_dashpanels.remote.unavailable"),
                     width / 2, height / 2 - 4, 0xFFCC5555);
             return;
         }
 
-        Map<Module, int[]> rects = moduleRects();
-        Module hovered = null;
-        for (Map.Entry<Module, int[]> entry : rects.entrySet()) {
-            if (inside(entry.getValue(), mouseX, mouseY)) {
-                hovered = entry.getKey();
-            }
-        }
-
-        drawPanel(graphics, partialTick);
-        drawOverlay(graphics, rects, hovered);
+        drawPanels(graphics, partialTick);
+        drawOverlay(graphics, mouseX, mouseY);
     }
 
-    private void drawPanel(GuiGraphics graphics, float partialTick) {
+    private int rowLeft() {
+        return (width - cell * panels.size()) / 2;
+    }
+
+    private int panelLeft(int index) {
+        return rowLeft() + index * cell;
+    }
+
+    private int panelTop() {
+        return (height - cell) / 2;
+    }
+
+    private void drawPanels(GuiGraphics graphics, float partialTick) {
         Minecraft minecraft = Minecraft.getInstance();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         PoseStack pose = graphics.pose();
@@ -132,45 +145,67 @@ public class PanelRemoteScreen extends Screen {
         RenderSystem.enableDepthTest();
         Lighting.setupForFlatItems();
 
-        pose.pushPose();
-        panelPose(pose);
-        // The board itself. Dashpanels renders it as an ordinary block model, not as part of the
-        // block entity renderer, so without this the screen shows modules floating in empty space.
-        minecraft.getBlockRenderer().renderSingleBlock(
-                panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                panel.getModelData(), null);
-
-        pose.pushPose();
-        pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw()), 0.5F, 0.0F, 0.5F);
-        panel.renderTransform(pose);
-        for (Module module : panel.getModules().values()) {
+        for (int index = 0; index < panels.size(); index++) {
+            AbstractPanelBlockEntity panel = panels.get(index);
             pose.pushPose();
-            panel.getIndividualModuleTransform().accept(module, pose);
-            pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
-                    (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
-            module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+            panelPose(pose, panel, panelLeft(index), panelTop());
+            // The board itself. Dashpanels renders it as an ordinary block model, not as part of the
+            // block entity renderer, so without this the screen shows modules floating in nothing.
+            minecraft.getBlockRenderer().renderSingleBlock(
+                    panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
+                    panel.getModelData(), null);
+
+            pose.pushPose();
+            pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
+            panel.renderTransform(pose);
+            for (Module module : panel.getModules().values()) {
+                pose.pushPose();
+                panel.getIndividualModuleTransform().accept(module, pose);
+                pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
+                        (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
+                module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+                pose.popPose();
+            }
+            pose.popPose();
+
+            buffers.endBatch();
             pose.popPose();
         }
-        pose.popPose();
-
-        buffers.endBatch();
-        pose.popPose();
 
         Lighting.setupFor3DItems();
         RenderSystem.disableDepthTest();
     }
 
+    /** The module under the cursor, and the rectangle it was found in. */
+    private record Hit(AbstractPanelBlockEntity panel, Module module, int[] rect) {
+    }
+
+    private Hit hitAt(double mouseX, double mouseY) {
+        for (int index = 0; index < panels.size(); index++) {
+            AbstractPanelBlockEntity panel = panels.get(index);
+            for (ModuleRect rect : moduleRects(panel, panelLeft(index), panelTop())) {
+                if (inside(rect.rect(), mouseX, mouseY)) {
+                    return new Hit(panel, rect.module(), rect.rect());
+                }
+            }
+        }
+        return null;
+    }
+
+    private record ModuleRect(Module module, int[] rect) {
+    }
+
     /**
-     * Screen rectangles of every module, in the same transform the renderer uses, so the highlight
-     * and the click test can never disagree with what is on screen.
+     * Screen rectangles of a panel's modules, in the same transform the renderer uses, so the
+     * highlight and the click test can never disagree with what is on screen.
      */
-    private Map<Module, int[]> moduleRects() {
-        Map<Module, int[]> out = new LinkedHashMap<>();
+    private List<ModuleRect> moduleRects(AbstractPanelBlockEntity panel, int left, int top) {
+        List<ModuleRect> out = new ArrayList<>();
         PoseStack pose = new PoseStack();
         pose.pushPose();
-        panelPose(pose);
+        panelPose(pose, panel, left, top);
         pose.pushPose();
-        pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw()), 0.5F, 0.0F, 0.5F);
+        pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
         panel.renderTransform(pose);
 
         for (Module module : panel.getModules().values()) {
@@ -197,9 +232,9 @@ public class PanelRemoteScreen extends Screen {
                 maxX = Math.max(maxX, point.x);
                 maxY = Math.max(maxY, point.y);
             }
-            out.put(module, new int[]{
+            out.add(new ModuleRect(module, new int[]{
                     Math.round(minX), Math.round(minY),
-                    Math.round(maxX - minX), Math.round(maxY - minY)});
+                    Math.round(maxX - minX), Math.round(maxY - minY)}));
             pose.popPose();
         }
 
@@ -209,15 +244,15 @@ public class PanelRemoteScreen extends Screen {
     }
 
     /**
-     * The whole camera, ending in block space with the panel's face turned towards the viewer and
-     * tilted by {@link #TILT}.
+     * Camera for one panel cell: block space to screen, with the panel's face turned towards the
+     * viewer and then tilted by {@link DbdConfig#cameraTilt()}.
      */
-    private void panelPose(PoseStack pose) {
-        pose.translate(panelLeft, panelTop, 350.0F);
-        pose.scale(panelWidth, panelHeight, -Math.max(panelWidth, panelHeight));
+    private void panelPose(PoseStack pose, AbstractPanelBlockEntity panel, int left, int top) {
+        pose.translate(left, top, 350.0F);
+        pose.scale(cell, cell, -cell);
         pose.mulPose(Axis.XN.rotationDegrees(90.0F));
 
-        Direction facing = facing();
+        Direction facing = facing(panel);
         float blockYaw = Mth.wrapDegrees(facing.toYRot() + 180.0F);
         float pitch = panel instanceof WallPanelBlockEntity ? 90.0F
                 : panel instanceof CeilingPanelBlockEntity ? 135.0F
@@ -227,18 +262,20 @@ public class PanelRemoteScreen extends Screen {
                 .rotateX((float) Math.toRadians(pitch));
 
         pose.translate(0.5F, 0.5F, 0.5F);
+        // Tilt first, then cancel the mounting: that keeps the tilt on the panel's own horizontal
+        // axis instead of turning into a yaw that shows the panel edge on.
+        pose.mulPose(Axis.XP.rotationDegrees(DbdConfig.cameraTilt()));
         pose.mulPose(mounted.invert());
-        pose.mulPose(Axis.XP.rotationDegrees(TILT));
         pose.translate(-0.5F, -0.5F, -0.5F);
     }
 
-    private Direction facing() {
+    private static Direction facing(AbstractPanelBlockEntity panel) {
         BlockState state = panel.getBlockState();
         return state.hasProperty(PanelBlock.FACING) ? state.getValue(PanelBlock.FACING) : Direction.NORTH;
     }
 
-    private float moduleYaw() {
-        Direction facing = facing();
+    private static float moduleYaw(AbstractPanelBlockEntity panel) {
+        Direction facing = facing(panel);
         return facing.toYRot() + (facing.getAxis() == Direction.Axis.Z ? 0.0F : 180.0F);
     }
 
@@ -246,14 +283,14 @@ public class PanelRemoteScreen extends Screen {
         return x >= rect[0] && y >= rect[1] && x < rect[0] + rect[2] && y < rect[1] + rect[3];
     }
 
-    private void drawOverlay(GuiGraphics graphics, Map<Module, int[]> rects, Module hovered) {
-        if (hovered != null) {
-            int[] rect = rects.get(hovered);
+    private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
+        Hit hit = hitAt(mouseX, mouseY);
+        if (hit != null) {
             graphics.pose().pushPose();
             graphics.pose().translate(0.0F, 0.0F, 400.0F);
-            graphics.renderOutline(rect[0], rect[1], rect[2], rect[3], HIGHLIGHT);
+            graphics.renderOutline(hit.rect()[0], hit.rect()[1], hit.rect()[2], hit.rect()[3], HIGHLIGHT);
             graphics.pose().popPose();
-            graphics.drawCenteredString(font, hovered.getName(), width / 2, height - 32, NAME_COLOR);
+            graphics.drawCenteredString(font, hit.module().getName(), width / 2, height - 32, NAME_COLOR);
         }
         graphics.drawCenteredString(font,
                 Component.translatable("gui.drive_by_dashpanels.remote.hint"),
@@ -262,21 +299,27 @@ public class PanelRemoteScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0 || panel == null) {
+        if (button != 0) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        Module target = null;
-        for (Map.Entry<Module, int[]> entry : moduleRects().entrySet()) {
-            if (inside(entry.getValue(), mouseX, mouseY)) {
-                target = entry.getKey();
-            }
-        }
-        if (target == null) {
+        Hit hit = hitAt(mouseX, mouseY);
+        if (hit == null) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        PacketDistributor.sendToServer(new TerminalClickPacket(receiverPos, panelPos, target.getName()));
+        PacketDistributor.sendToServer(
+                new TerminalClickPacket(receiverPos, hit.panel().getBlockPos(), hit.module().getName()));
         Minecraft.getInstance().getSoundManager().play(
                 SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
+        return true;
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (scrollY == 0.0D) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
+        zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
+        layout();
         return true;
     }
 

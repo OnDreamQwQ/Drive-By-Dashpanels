@@ -30,6 +30,15 @@ public final class DbdConfig {
      */
     public static final ModConfigSpec.BooleanValue REMOVE_CONNECTIONS_ON_MODULE_LOSS;
 
+    /**
+     * How far the panel remote's camera leans off the panel's working face, in degrees.
+     *
+     * <p>Positive values look down at the panel, negative values look up at it. Zero is a straight
+     * face-on view. A config value rather than a constant so the sign can be flipped without another
+     * build.
+     */
+    public static final ModConfigSpec.DoubleValue CAMERA_TILT;
+
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
 
@@ -50,6 +59,11 @@ public final class DbdConfig {
                         "the panel link center to clean up manually instead.")
                 .define("removeConnectionsOnModuleLoss", false);
 
+        CAMERA_TILT = builder
+                .comment("Degrees the panel remote's camera leans off the panel face.",
+                        "Positive looks down at the panel, negative looks up at it, 0 is face on.")
+                .defineInRange("cameraTilt", 45.0D, -89.0D, 89.0D);
+
         SPEC = builder.build();
     }
 
@@ -62,5 +76,9 @@ public final class DbdConfig {
 
     public static boolean removeOnModuleLoss() {
         return REMOVE_CONNECTIONS_ON_MODULE_LOSS.get();
+    }
+
+    public static float cameraTilt() {
+        return CAMERA_TILT.get().floatValue();
     }
 }

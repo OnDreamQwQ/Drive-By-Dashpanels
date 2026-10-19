@@ -65,12 +65,11 @@ public class PanelRemoteItem extends Item {
             tell(player, "remote.too_far", ChatFormatting.RED);
             return InteractionResultHolder.success(stack);
         }
-        BlockPos panel = receiver.panelPos();
-        if (panel == null) {
+        if (receiver.panels().isEmpty()) {
             tell(player, "remote.no_panel", ChatFormatting.YELLOW);
             return InteractionResultHolder.success(stack);
         }
-        PanelRemoteScreen.open(panel, bound.pos());
+        PanelRemoteScreen.open(bound.pos());
         return InteractionResultHolder.success(stack);
     }
 

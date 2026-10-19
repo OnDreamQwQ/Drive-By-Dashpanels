@@ -19,8 +19,8 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  * "The player clicked this module in the projection."
  *
  * <p>The client knows which module is under the cursor because it does the projection with the real
- * panel block entity, so all this packet carries is the name. The server re-checks that the receiver
- * is still bound to that panel and that the named module still exists, then runs the module's own
+ * panel block entity, so all this packet carries is the name. The server re-checks that the panel is
+ * one the receiver still serves and that the named module still exists, then runs the module's own
  * {@code onUse} - the same entry point a right click on the panel would use.
  *
  * @param receiver the receiver the remote is bound to
@@ -57,7 +57,7 @@ public record TerminalClickPacket(BlockPos receiver, BlockPos panel, String modu
             if (!(receiverEntity instanceof PanelRemoteReceiverBlockEntity receiver)) {
                 return;
             }
-            if (!packet.panel().equals(receiver.panelPos())) {
+            if (!receiver.covers(packet.panel())) {
                 return;
             }
             BlockEntity panelEntity = level.getBlockEntity(packet.panel());
