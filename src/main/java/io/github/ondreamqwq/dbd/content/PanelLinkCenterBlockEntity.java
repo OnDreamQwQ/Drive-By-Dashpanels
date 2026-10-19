@@ -89,27 +89,26 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     private final Map<String, String> aliases = new LinkedHashMap<>();
 
     /**
-     * Module the cables coming <i>into</i> this center drive, or an empty string for none.
+     * The one module this center publishes, or an empty string to publish every sending module.
      *
-     * <p>Publishing (module -&gt; cable) needs no choice: every module gets its own channel. The other
-     * direction does need one, because a cable arriving here carries a single channel and there may
-     * be any number of modules on the network. The picker screen sets this.
+     * <p>By default a center puts one channel per <i>sending</i> module on the wire; the picker
+     * narrows that down to a single module so a wire only ever offers the channel the player asked
+     * for. Receiving modules are never offered: they consume signals, so a channel for one would
+     * always read 0.
      */
     private String target = "";
-
-    /** Last value written into {@link #target}, so the module is only updated when the signal moves. */
-    private int lastApplied = -1;
 
     public PanelLinkCenterBlockEntity(BlockPos pos, BlockState state) {
         super(DbdRegistry.PANEL_LINK_CENTER_BE.get(), pos, state);
     }
 
     /**
-     * The cable channels this center offers: one per module (one per multi-input sub-key), plus the
-     * old name of every renamed module so a cable bound before the rename stays selectable.
+     * The cable channels this center offers: one per sending module (one per multi-input sub-key),
+     * or just the picked one, plus the old name of every renamed module so a cable bound before the
+     * rename stays selectable.
      */
     public List<String> channelNames() {
-        return channelList(valuesOf(collect()).keySet());
+        return channelList(publishable(valuesOf(collect())).keySet());
     }
 
     /** Server-side view of the cable network this center joined, or {@code null} when it has none. */
@@ -125,133 +124,48 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         }
         Map<String, Module> modules = collect();
         trackRenames(level, pos, modules);
-        Map<String, Integer> now = valuesOf(modules);
+        Map<String, Integer> now = publishable(valuesOf(modules));
         List<String> names = channelList(now.keySet());
         if (!names.equals(synced)) {
             synced = names;
             level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
         }
         publish(level, pos, now);
-        applyIncoming(level, pos, modules);
     }
 
-    // ------------------------------------------------------------------ incoming signals
+    // ------------------------------------------------------------------ channels
 
-    /** Module names a received cable signal can be written into: {@code IOutput} modules only. */
-    public List<String> outputModules() {
-        List<String> names = new ArrayList<>();
-        for (Map.Entry<String, Module> entry : collect().entrySet()) {
-            if (entry.getValue() instanceof IOutput) {
-                names.add(entry.getKey());
-            }
-        }
-        return List.copyOf(names);
+    /**
+     * Channels the player may pick from: every sending module, multi-inputs split per sub-key.
+     *
+     * <p>Receiving-only modules are deliberately absent. They consume signals rather than produce
+     * them, so publishing a channel for one would hand the wire a value that is always 0.
+     */
+    public List<String> senderChannels() {
+        return List.copyOf(valuesOf(collect()).keySet());
     }
 
-    /** Every module on the network, in panel order, whether or not it can receive a signal. */
-    public List<String> moduleNames() {
-        return List.copyOf(collect().keySet());
-    }
-
-    /** Module the incoming cables drive, or an empty string. */
+    /** The module this center publishes, or an empty string when it publishes every sender. */
     public String target() {
         return target;
     }
 
-    /** Choose the module incoming cable signals drive. An empty name clears the choice. */
+    /** Narrow publishing down to one module. An empty name publishes every sender again. */
     public void setTarget(String module) {
         String next = module == null ? "" : module;
         if (next.equals(target)) {
             return;
         }
         target = next;
-        lastApplied = -1;
         setChanged();
     }
 
-    /**
-     * Write the incoming signal into the chosen module.
-     *
-     * <p>"Incoming" means a cable whose <i>sink</i> is this block: Drive By Wire stores links as
-     * (source, channel) -&gt; sinks, so the value is looked up per channel and the strongest feeding
-     * link wins, which matches how redstone dust settles several inputs.
-     */
-    private void applyIncoming(Level level, BlockPos pos, Map<String, Module> modules) {
-        if (target.isEmpty()) {
-            lastApplied = -1;
-            return;
+    /** {@code now}, narrowed to the picked module when there is one and it still exists. */
+    private Map<String, Integer> publishable(Map<String, Integer> now) {
+        if (target.isEmpty() || !now.containsKey(target)) {
+            return now;
         }
-        Module module = modules.get(target);
-        if (!(module instanceof IOutput output)) {
-            lastApplied = -1;
-            return;
-        }
-        int value = incomingValue(level, pos);
-        if (value == lastApplied) {
-            return;
-        }
-        lastApplied = value;
-        output.setAnalog(value);
-        AbstractPanelBlockEntity panel = module.parentBlockEntity;
-        if (panel != null) {
-            // Same refresh the panel linker's own redstone linkable does, so the module repaints.
-            panel.networkUpdate(panel.getOrCreate());
-        }
-    }
-
-    /** Strongest signal any cable delivers into {@code pos}, 0 when nothing is connected. */
-    private static int incomingValue(Level level, BlockPos pos) {
-        WireNetworkManager network = WireNetworkManager.get(level);
-        if (network == null) {
-            return 0;
-        }
-        Map<Long, Map<String, Set<WireNetworkNode.WireNetworkSink>>> graph = network.getNetwork();
-        if (graph == null) {
-            return 0;
-        }
-        int best = 0;
-        for (Map.Entry<Long, Map<String, Set<WireNetworkNode.WireNetworkSink>>> sourceEntry : graph.entrySet()) {
-            BlockPos source = BlockPos.of(sourceEntry.getKey());
-            if (source.equals(pos)) {
-                // Our own published channels; reading them back would fight the outputs.
-                continue;
-            }
-            for (Map.Entry<String, Set<WireNetworkNode.WireNetworkSink>> channelEntry
-                    : sourceEntry.getValue().entrySet()) {
-                if (!feeds(channelEntry.getValue(), pos)) {
-                    continue;
-                }
-                best = Math.max(best, channelValue(level, network, source, channelEntry.getKey()));
-            }
-        }
-        return best;
-    }
-
-    /** Whether one of the sinks of a link is {@code pos}. */
-    private static boolean feeds(Set<WireNetworkNode.WireNetworkSink> sinks, BlockPos pos) {
-        for (WireNetworkNode.WireNetworkSink sink : sinks) {
-            BlockPos sinkPos = BlockPos.of(sink.position());
-            if (sinkPos.equals(pos)) {
-                return true;
-            }
-            int facing = sink.direction();
-            if (facing >= 0 && facing < Direction.values().length
-                    && sinkPos.relative(Direction.from3DDataValue(facing)).equals(pos)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static int channelValue(Level level, WireNetworkManager network, BlockPos source, String channel) {
-        if (WireNetworkManager.WORLD_CHANNEL.equals(channel)) {
-            return clamp(WireNetworkManager.computeWorldSignal(level, source));
-        }
-        Map<String, Integer> signals = network.getSourceSignals(source);
-        if (signals == null) {
-            return 0;
-        }
-        return clamp(signals.getOrDefault(channel, 0));
+        return Map.of(target, now.get(target));
     }
 
     @Override
@@ -286,6 +200,12 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             String previous = seenNames.put(entry.getValue(), name);
             if (previous == null || previous.equals(name)) {
                 continue;
+            }
+            if (previous.equals(target)) {
+                // The picked module was the one renamed: follow it, or the center would silently
+                // fall back to publishing everything.
+                target = name;
+                setChanged();
             }
             // The instance kept its identity, only its name moved: every alias pointing at the old
             // name now points at the new one.
@@ -425,7 +345,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
             }
         }
         target = tag.getString(TAG_TARGET);
-        lastApplied = -1;
         if (level != null && level.isClientSide) {
             PanelLinkChannels.store(worldPosition, names);
         }

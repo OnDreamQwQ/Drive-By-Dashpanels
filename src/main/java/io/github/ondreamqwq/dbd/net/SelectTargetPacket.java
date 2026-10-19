@@ -13,9 +13,9 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 /**
- * Pick which module of the panel network this center feeds, or clear the choice with an empty name.
+ * Pick which sending module this center publishes, or clear the choice with an empty name.
  *
- * <p>The name is validated against the center's own drivable list, so a stale click cannot leave the
+ * <p>The name is validated against the center's own sender list, so a stale click cannot leave the
  * center pointing at a module that was removed in the meantime.
  */
 public record SelectTargetPacket(BlockPos pos, String module) implements CustomPacketPayload {
@@ -53,7 +53,7 @@ public record SelectTargetPacket(BlockPos pos, String module) implements CustomP
             String wanted = packet.module();
             // The picker closes the moment the tick is clicked, so nothing is sent back: a refreshed
             // list would only reopen the screen the player just dismissed.
-            String applied = wanted.isEmpty() || center.outputModules().contains(wanted) ? wanted : center.target();
+            String applied = wanted.isEmpty() || center.senderChannels().contains(wanted) ? wanted : center.target();
             center.setTarget(applied);
         });
     }

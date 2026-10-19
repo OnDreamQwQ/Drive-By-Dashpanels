@@ -2,9 +2,7 @@ package io.github.ondreamqwq.dbd.client;
 
 import io.github.ondreamqwq.dbd.DbdMod;
 import io.github.ondreamqwq.dbd.net.SelectTargetPacket;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -16,7 +14,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Picks which module of the panel network a panel link center feeds.
+ * Picks which sending module a panel link center puts on the wire.
  *
  * <p>The artwork is a re-cut of Dashpanels' own panel linker screen, so the layout constants below
  * are measured off the texture rather than copied from that screen: the window is still 220x158 at
@@ -25,9 +23,9 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * confirm tick) and one in the bottom bar (where the linker had its confirm button, now the exit).
  * The icons are therefore drawn straight into those slots, with no button frame of our own.
  *
- * <p>Every module on the network is listed, not just the ones a signal can be written into, so a
- * player who adds a module always sees it appear. Rows that cannot receive are greyed out and carry a
- * tooltip instead of a tick.
+ * <p>The list holds only modules that can send a signal; a receiving module would offer a channel
+ * that always reads 0. Clicking the row that is already picked clears the pick again, which puts
+ * every sender back on the wire.
  */
 public class ChannelSelectScreen extends Screen {
 
@@ -76,33 +74,30 @@ public class ChannelSelectScreen extends Screen {
     /** The exact colour and call style Dashpanels' panel linker uses for its own title. */
     private static final int TITLE_COLOR = 0x592424;
     private static final int NAME_COLOR = 0xFFFFFF;
-    private static final int DISABLED_COLOR = 0x9A9A9A;
     private static final int EMPTY_COLOR = 0x7A5B45;
 
     private final BlockPos center;
-    private final List<String> modules;
-    private final Set<String> drivable;
-    private final String target;
+    private final List<String> channels;
+    private final String current;
 
     private int leftPos;
     private int topPos;
     private int scroll;
 
-    public ChannelSelectScreen(BlockPos center, List<String> modules, List<String> drivable, String target) {
+    public ChannelSelectScreen(BlockPos center, List<String> channels, String current) {
         super(Component.translatable("gui.drive_by_dashpanels.channel_select"));
         this.center = center;
-        this.modules = List.copyOf(modules);
-        this.drivable = new HashSet<>(drivable);
-        this.target = target;
+        this.channels = List.copyOf(channels);
+        this.current = current;
     }
 
     /** Opens the picker, unless it is already up (the server may answer more than one request). */
-    public static void open(BlockPos center, List<String> modules, List<String> drivable, String target) {
+    public static void open(BlockPos center, List<String> channels, String current) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.screen instanceof ChannelSelectScreen) {
             return;
         }
-        minecraft.setScreen(new ChannelSelectScreen(center, modules, drivable, target));
+        minecraft.setScreen(new ChannelSelectScreen(center, channels, current));
     }
 
     @Override
@@ -123,12 +118,12 @@ public class ChannelSelectScreen extends Screen {
 
         graphics.enableScissor(this.leftPos, this.topPos + LIST_TOP,
                 this.leftPos + WINDOW_WIDTH, this.topPos + LIST_BOTTOM);
-        if (this.modules.isEmpty()) {
+        if (this.channels.isEmpty()) {
             graphics.drawCenteredString(this.font,
                     Component.translatable("gui.drive_by_dashpanels.channel_select.empty"),
                     this.leftPos + WINDOW_WIDTH / 2, this.topPos + ROW_FIRST + 24, EMPTY_COLOR);
         }
-        for (int index = 0; index < this.modules.size(); index++) {
+        for (int index = 0; index < this.channels.size(); index++) {
             renderRow(graphics, index, rowTop(index), mouseX, mouseY);
         }
         graphics.disableScissor();
@@ -140,13 +135,6 @@ public class ChannelSelectScreen extends Screen {
         }
         drawIcon(graphics, EXIT_U, EXIT_V, exitX, exitY);
 
-        int hovered = rowAt(mouseX, mouseY);
-        if (hovered >= 0 && !isDrivable(this.modules.get(hovered))) {
-            graphics.renderTooltip(this.font,
-                    Component.translatable("gui.drive_by_dashpanels.channel_select.no_output"),
-                    mouseX, mouseY);
-        }
-
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
@@ -154,16 +142,11 @@ public class ChannelSelectScreen extends Screen {
         int rowX = this.leftPos + ROW_U;
         graphics.blit(TEXTURE, rowX, rowY, 0, ROW_V, ROW_WIDTH, ROW_HEIGHT);
 
-        String name = this.modules.get(index);
-        boolean can = isDrivable(name);
-        if (name.equals(this.target)) {
+        String name = this.channels.get(index);
+        if (name.equals(this.current)) {
             graphics.fill(rowX + 2, rowY + 2, rowX + ROW_WIDTH - 2, rowY + ROW_HEIGHT - 2, 0x33FFC400);
         }
-        graphics.drawString(this.font, name, rowX + 8, rowY + 11,
-                can ? NAME_COLOR : DISABLED_COLOR, false);
-        if (!can) {
-            return;
-        }
+        graphics.drawString(this.font, name, rowX + 8, rowY + 11, NAME_COLOR, false);
 
         int slotX = rowX + SLOT_X;
         int slotY = rowY + SLOT_Y - ROW_V;
@@ -186,9 +169,12 @@ public class ChannelSelectScreen extends Screen {
                 return true;
             }
             int index = slotAt(mouseX, mouseY);
-            if (index >= 0 && isDrivable(this.modules.get(index))) {
+            if (index >= 0) {
                 click();
-                PacketDistributor.sendToServer(new SelectTargetPacket(this.center, this.modules.get(index)));
+                String picked = this.channels.get(index);
+                // Ticking the current choice again clears it, so every sender goes back on the wire.
+                String send = picked.equals(this.current) ? "" : picked;
+                PacketDistributor.sendToServer(new SelectTargetPacket(this.center, send));
                 onClose();
                 return true;
             }
@@ -215,30 +201,9 @@ public class ChannelSelectScreen extends Screen {
         return false;
     }
 
-    private boolean isDrivable(String name) {
-        return this.drivable.contains(name);
-    }
-
     /** Top edge of a row in screen space, already scrolled. */
     private int rowTop(int index) {
         return this.topPos + ROW_FIRST + index * ROW_STEP - this.scroll;
-    }
-
-    /** Index of the row under the mouse, clipped to the list, or -1. */
-    private int rowAt(double mouseX, double mouseY) {
-        if (mouseX < this.leftPos + ROW_U || mouseX >= this.leftPos + ROW_U + ROW_WIDTH) {
-            return -1;
-        }
-        if (mouseY < this.topPos + LIST_TOP || mouseY >= this.topPos + LIST_BOTTOM) {
-            return -1;
-        }
-        for (int index = 0; index < this.modules.size(); index++) {
-            int rowY = rowTop(index);
-            if (mouseY >= rowY && mouseY < rowY + ROW_HEIGHT) {
-                return index;
-            }
-        }
-        return -1;
     }
 
     /** Index of the row whose check slot is under the mouse, or -1. */
@@ -246,7 +211,7 @@ public class ChannelSelectScreen extends Screen {
         if (mouseY < this.topPos + LIST_TOP || mouseY > this.topPos + LIST_BOTTOM) {
             return -1;
         }
-        for (int index = 0; index < this.modules.size(); index++) {
+        for (int index = 0; index < this.channels.size(); index++) {
             int rowY = rowTop(index);
             int slotX = this.leftPos + ROW_U + SLOT_X;
             int slotY = rowY + SLOT_Y - ROW_V;
@@ -259,7 +224,7 @@ public class ChannelSelectScreen extends Screen {
 
     /** Scrolled far enough that the last row is fully visible, not just its top edge. */
     private int clampScroll(int value) {
-        int lastRowBottom = ROW_FIRST + Math.max(0, this.modules.size() - 1) * ROW_STEP + ROW_HEIGHT;
+        int lastRowBottom = ROW_FIRST + Math.max(0, this.channels.size() - 1) * ROW_STEP + ROW_HEIGHT;
         int max = Math.max(0, lastRowBottom - LIST_BOTTOM);
         return Math.max(0, Math.min(value, max));
     }

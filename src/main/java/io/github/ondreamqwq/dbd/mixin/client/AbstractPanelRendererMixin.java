@@ -4,13 +4,17 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import io.github.ondreamqwq.dbd.client.WireSelection;
 import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
 import moth.boxxed.panels.api.panel.AbstractPanelRenderer;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.world.phys.AABB;
 
 /**
  * Draws the "this module is wired" outline.
@@ -19,9 +23,25 @@ import net.minecraft.client.renderer.MultiBufferSource;
  * {@code renderModules}, because the pose at that point is already the one Dashpanels uses for the
  * module itself (panel transform plus the per-module rotation), and {@link Module#renderOutline}
  * expects exactly that. Reproducing the transform by hand would drift from theirs.
+ *
+ * <p>Two details make the frame readable next to Dashpanels' own white hover outline, which is drawn
+ * on exactly the same geometry:
+ * <ul>
+ *   <li>the frame is inflated by a hair around the module's own centre, so the two outlines sit at
+ *       slightly different depths instead of fighting for the same pixels (that fight is what looked
+ *       like flickering);</li>
+ *   <li>the line width is raised and the line batch is flushed while it is still raised, because
+ *       line width is a draw-time state -- setting it around the call does nothing if the vertices
+ *       are only flushed at the end of the frame.</li>
+ * </ul>
  */
 @Mixin(value = AbstractPanelRenderer.class, remap = false)
 public abstract class AbstractPanelRendererMixin {
+
+    /** How far the frame is pushed out, as a fraction of the module box. Small enough to still hug it. */
+    private static final float INFLATE = 1.02F;
+
+    private static final float LINE_WIDTH = 2.5F;
 
     @Redirect(
             method = "renderModules",
@@ -37,8 +57,27 @@ public abstract class AbstractPanelRendererMixin {
             float partialTick, MultiBufferSource buffer, int light, int overlay) {
         module.render(panel, pose, partialTick, buffer, light, overlay);
         int color = WireSelection.frameColor(panel, module);
-        if (color != 0) {
-            module.renderOutline(pose, buffer, partialTick, color);
+        if (color == 0) {
+            return;
         }
+
+        AABB bounds = module.getVoxelShape().bounds();
+        double cx = (bounds.minX + bounds.maxX) / 2.0D;
+        double cy = (bounds.minY + bounds.maxY) / 2.0D;
+        double cz = (bounds.minZ + bounds.maxZ) / 2.0D;
+
+        pose.pushPose();
+        pose.translate(cx, cy, cz);
+        pose.scale(INFLATE, INFLATE, INFLATE);
+        pose.translate(-cx, -cy, -cz);
+
+        RenderSystem.lineWidth(LINE_WIDTH);
+        module.renderOutline(pose, buffer, partialTick, color);
+        // Flush now, while the width is still in effect; renderOutline queues into the shared line
+        // buffer, which would otherwise only be drawn at the end of the frame at the default width.
+        Minecraft.getInstance().renderBuffers().bufferSource().endBatch(RenderType.lines());
+        RenderSystem.lineWidth(1.0F);
+
+        pose.popPose();
     }
 }

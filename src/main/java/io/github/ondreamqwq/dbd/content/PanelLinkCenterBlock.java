@@ -151,11 +151,14 @@ public class PanelLinkCenterBlock extends ModulesNetworkMemberBlock implements e
         } else {
             List<String> names = center.channelNames();
             if (names.isEmpty()) {
-                text = "面板链接中心：已接入网络，但网络里没有可读取的模块";
+                text = "面板链接中心：已接入网络，但网络里没有可以发送信号的模块";
             } else {
                 List<String> shown = names.size() > REPORT_LIMIT ? names.subList(0, REPORT_LIMIT) : names;
-                text = "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", shown)
-                        + (names.size() > REPORT_LIMIT ? " ..." : "");
+                String picked = center.target();
+                String what = picked.isEmpty() ? names.size() + " 个模块" : picked;
+                text = "面板链接中心：正在发送 " + what + " -> " + String.join(", ", shown)
+                        + (names.size() > REPORT_LIMIT ? " ..." : "")
+                        + "（空手按 Alt 选择模块）";
             }
         }
         player.displayClientMessage(Component.literal(text), false);
