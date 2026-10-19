@@ -3,6 +3,7 @@ package io.github.ondreamqwq.dbd.client;
 import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.math.Axis;
 import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
@@ -106,6 +107,9 @@ public class PanelRemoteScreen extends Screen {
     private static final double CLICK_SLOP = 3.0D;
     /** Mouse travel handed to a hold interaction per scroll notch, in the same units a drag uses. */
     private static final double SCROLL_NOTCH = 40.0D;
+    /** How far the camera sits from the assembly when projecting in perspective, in GUI pixels. */
+    private static final float PERSPECTIVE_DEPTH = 1500.0F;
+
     private static final float CAMERA_DEPTH = 350.0F;
 
     private final BlockPos receiverPos;
@@ -247,7 +251,15 @@ public class PanelRemoteScreen extends Screen {
      */
     private void assemblyPose(PoseStack pose) {
         AbstractPanelBlockEntity reference = panels.get(0);
-        pose.translate(width / 2.0F, height / 2.0F, CAMERA_DEPTH);
+        if (DbdConfig.perspective()) {
+            // The base of the GUI pose already sits far back (the game pushes the whole 2D layer down the
+            // z axis), and a picking pose starts at zero. Subtracting the base keeps the assembly at the
+            // same distance in camera space either way, which perspective needs and orthographic did not.
+            float baseZ = pose.last().pose().m32();
+            pose.translate(width / 2.0F, height / 2.0F, -PERSPECTIVE_DEPTH - baseZ);
+        } else {
+            pose.translate(width / 2.0F, height / 2.0F, CAMERA_DEPTH);
+        }
         pose.scale(cell, cell, -cell);
         pose.mulPose(Axis.XN.rotationDegrees(90.0F));
         pose.mulPose(mounted(reference).invert());
@@ -271,10 +283,33 @@ public class PanelRemoteScreen extends Screen {
                 .rotateX((float) Math.toRadians(pitch));
     }
 
+    /**
+     * The perspective matrix, or {@code null} while the remote stays orthographic.
+     *
+     * <p>The field of view is derived from the canvas and the camera distance, so a block stays the same
+     * number of pixels across either way and flipping the switch never resizes the picture.
+     */
+    private Matrix4f perspectiveProjection() {
+        if (!DbdConfig.perspective()) {
+            return null;
+        }
+        float fov = (float) (2.0D * Math.atan(height / (2.0D * PERSPECTIVE_DEPTH)));
+        return new Matrix4f().perspective(fov, (float) width / (float) height, 3.0F, PERSPECTIVE_DEPTH * 8.0F);
+    }
+
     private void drawPanels(GuiGraphics graphics, float partialTick) {
         Minecraft minecraft = Minecraft.getInstance();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         PoseStack pose = graphics.pose();
+
+        Matrix4f projected = perspectiveProjection();
+        Matrix4f savedProjection = null;
+        VertexSorting savedSorting = null;
+        if (projected != null) {
+            savedProjection = RenderSystem.getProjectionMatrix();
+            savedSorting = RenderSystem.getVertexSorting();
+            RenderSystem.setProjectionMatrix(projected, VertexSorting.DISTANCE_TO_ORIGIN);
+        }
 
         RenderSystem.enableDepthTest();
         Lighting.setupForFlatItems();
@@ -317,6 +352,9 @@ public class PanelRemoteScreen extends Screen {
 
         Lighting.setupFor3DItems();
         RenderSystem.disableDepthTest();
+        if (savedProjection != null) {
+            RenderSystem.setProjectionMatrix(savedProjection, savedSorting);
+        }
     }
 
     /** The module under the cursor, and the rectangle it was found in. */
@@ -370,6 +408,7 @@ public class PanelRemoteScreen extends Screen {
 
             AABB box = module.getVoxelShape().bounds();
             Matrix4f matrix = new Matrix4f(pose.last().pose());
+            Matrix4f projection = perspectiveProjection();
             float minX = Float.MAX_VALUE;
             float minY = Float.MAX_VALUE;
             float maxX = -Float.MAX_VALUE;
@@ -381,6 +420,14 @@ public class PanelRemoteScreen extends Screen {
                         (float) ((corner & 4) == 0 ? box.minZ : box.maxZ),
                         1.0F);
                 point.mul(matrix);
+                if (projection != null) {
+                    point.mul(projection);
+                    if (point.w != 0.0F) {
+                        point.div(point.w);
+                    }
+                    point.x = (point.x * 0.5F + 0.5F) * width;
+                    point.y = (0.5F - point.y * 0.5F) * height;
+                }
                 minX = Math.min(minX, point.x);
                 minY = Math.min(minY, point.y);
                 maxX = Math.max(maxX, point.x);

@@ -40,6 +40,15 @@ public final class DbdConfig {
     public static final ModConfigSpec.DoubleValue CAMERA_TILT;
 
     /**
+     * Whether the remote projects the panels in perspective instead of orthographically.
+     *
+     * <p>Orthographic is the default: every panel stays the same size no matter how deep it sits, which
+     * makes a wall of panels easy to read. Perspective looks more like standing in front of it, at the cost
+     * of the panels further back shrinking.
+     */
+    public static final ModConfigSpec.BooleanValue PERSPECTIVE;
+
+    /**
      * Whether the panel remote draws the little name/reading box in its top left corner.
      *
      * <p>On by default because it is the only place that spells out which module is being driven and
@@ -77,6 +86,11 @@ public final class DbdConfig {
                         "Turn this off if you would rather look at the panels without anything over them.")
                 .define("infoBox", true);
 
+        PERSPECTIVE = builder
+                .comment("Project the panels in perspective instead of orthographically.",
+                        "Off keeps every panel the same size; on makes the ones further back smaller.")
+                .define("perspective", false);
+
         SPEC = builder.build();
     }
 
@@ -97,5 +111,9 @@ public final class DbdConfig {
 
     public static boolean infoBox() {
         return INFO_BOX.get();
+    }
+
+    public static boolean perspective() {
+        return PERSPECTIVE.get();
     }
 }
