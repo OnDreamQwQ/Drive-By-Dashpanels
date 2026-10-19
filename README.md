@@ -6,8 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/OnDreamQwQ/Drive-By-Dashpanels?label=%E4%B8%8B%E8%BD%BD&color=green)](https://github.com/OnDreamQwQ/Drive-By-Dashpanels/releases/latest)
 
-- **0.1.21** —— 当前正式版，线控 ⇄ 面板双向桥接
-- **0.2.x** —— 面板遥控终端的实验版本，投影还在调，暂不建议日常使用
+- **0.3.0** —— 当前正式版：线控 ⇄ 面板双向桥接 + 面板遥控终端
 
 ## 使用方法
 
