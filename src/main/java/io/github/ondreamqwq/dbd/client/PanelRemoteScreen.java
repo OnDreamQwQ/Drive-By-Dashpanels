@@ -210,9 +210,10 @@ public class PanelRemoteScreen extends Screen {
                 endHold();
             }
         }
+        // Layer order, bottom to top: backdrop, models, crosshair + its indicator, then our own text.
+        drawCrosshair(graphics);
         drawHold(graphics, partialTick);
         drawOverlay(graphics, mouseX, mouseY);
-        drawCrosshair(graphics);
     }
 
     /**
@@ -389,17 +390,23 @@ public class PanelRemoteScreen extends Screen {
         return x >= rect[0] && y >= rect[1] && x < rect[0] + rect[2] && y < rect[1] + rect[3];
     }
 
+    /**
+     * The value indicator an interaction draws (a dial sprite, a number under the crosshair). It shares the
+     * crosshair's layer - above the models, below our own text - so the depth test is off while it is drawn
+     * and the batch is flushed before it is turned back on.
+     */
     private void drawHold(GuiGraphics graphics, float partialTick) {
         ModuleHoldInteraction<?> active = activeHold();
         if (active == null) {
             return;
         }
-        // The value indicator an interaction draws (dial sprite, number under the crosshair) lands in the
-        // GUI batch, so the 3D panels are flushed out first and the indicator again afterwards: that way
-        // it is always readable on top of them.
         graphics.flush();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
         active.renderGui(graphics, partialTick);
         graphics.flush();
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
     }
 
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
