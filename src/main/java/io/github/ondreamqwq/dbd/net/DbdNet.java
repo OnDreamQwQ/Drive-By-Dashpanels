@@ -15,5 +15,7 @@ public final class DbdNet {
                 RequestChannelsPacket::handle);
         registrar.playToClient(ChannelListPacket.TYPE, ChannelListPacket.STREAM_CODEC,
                 ChannelListPacket::handle);
+        registrar.playToServer(TerminalClickPacket.TYPE, TerminalClickPacket.STREAM_CODEC,
+                TerminalClickPacket::handle);
     }
 }

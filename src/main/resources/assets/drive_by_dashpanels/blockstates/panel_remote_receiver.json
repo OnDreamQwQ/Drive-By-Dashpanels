@@ -1,0 +1,9 @@
+{
+  "multipart": [
+    { "apply": { "model": "drive_by_dashpanels:block/panel_remote_receiver" } },
+    { "apply": { "model": "drive_by_dashpanels:block/cable_facing" }, "when": { "north": "true" } },
+    { "apply": { "model": "drive_by_dashpanels:block/cable_facing", "y": 90 }, "when": { "east": "true" } },
+    { "apply": { "model": "drive_by_dashpanels:block/cable_facing", "y": 180 }, "when": { "south": "true" } },
+    { "apply": { "model": "drive_by_dashpanels:block/cable_facing", "y": 270 }, "when": { "west": "true" } }
+  ]
+}

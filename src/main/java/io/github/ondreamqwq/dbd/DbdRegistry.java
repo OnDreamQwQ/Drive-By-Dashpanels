@@ -2,6 +2,9 @@ package io.github.ondreamqwq.dbd;
 
 import io.github.ondreamqwq.dbd.content.PanelLinkCenterBlock;
 import io.github.ondreamqwq.dbd.content.PanelLinkCenterBlockEntity;
+import io.github.ondreamqwq.dbd.content.PanelRemoteItem;
+import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlock;
+import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.BlockItem;
@@ -41,11 +44,35 @@ public final class DbdRegistry {
                             .of(PanelLinkCenterBlockEntity::new, PANEL_LINK_CENTER.get())
                             .build(null));
 
+    public static final DeferredBlock<PanelRemoteReceiverBlock> PANEL_REMOTE_RECEIVER = BLOCKS.register(
+            "panel_remote_receiver",
+            () -> new PanelRemoteReceiverBlock(BlockBehaviour.Properties.of()
+                    .strength(2.0F, 6.0F)
+                    .noOcclusion()));
+
+    public static final DeferredItem<BlockItem> PANEL_REMOTE_RECEIVER_ITEM = ITEMS.register(
+            "panel_remote_receiver",
+            () -> new BlockItem(PANEL_REMOTE_RECEIVER.get(), new Item.Properties()));
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<PanelRemoteReceiverBlockEntity>>
+            PANEL_REMOTE_RECEIVER_BE = BLOCK_ENTITIES.register("panel_remote_receiver", () ->
+                    BlockEntityType.Builder
+                            .of(PanelRemoteReceiverBlockEntity::new, PANEL_REMOTE_RECEIVER.get())
+                            .build(null));
+
+    public static final DeferredItem<PanelRemoteItem> PANEL_REMOTE = ITEMS.register(
+            "panel_remote",
+            () -> new PanelRemoteItem(new Item.Properties().stacksTo(1)));
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TAB = TABS.register("main", () ->
             CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup." + DbdMod.MOD_ID))
                     .icon(() -> new ItemStack(PANEL_LINK_CENTER_ITEM.get()))
-                    .displayItems((params, output) -> output.accept(PANEL_LINK_CENTER_ITEM.get()))
+                    .displayItems((params, output) -> {
+                        output.accept(PANEL_LINK_CENTER_ITEM.get());
+                        output.accept(PANEL_REMOTE_RECEIVER_ITEM.get());
+                        output.accept(PANEL_REMOTE.get());
+                    })
                     .build());
 
     private DbdRegistry() {
