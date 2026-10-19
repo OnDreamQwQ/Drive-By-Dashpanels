@@ -10,6 +10,7 @@
   "gui.drive_by_dashpanels.remote.title": "Panel Remote",
   "gui.drive_by_dashpanels.remote.hint": "Left click a module · drag to turn it · wheel to zoom",
   "gui.drive_by_dashpanels.remote.clicked": "Used %s",
+  "gui.drive_by_dashpanels.remote.holding": "Drag to adjust · ESC to stop",
   "gui.drive_by_dashpanels.remote.unavailable": "The panel is not loaded on this client",
   "gui.drive_by_dashpanels.remote.not_bound": "No receiver bound yet (sneak + right click a receiver)",
   "gui.drive_by_dashpanels.remote.unbound": "Binding cleared",
