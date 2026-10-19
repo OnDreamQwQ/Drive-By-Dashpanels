@@ -2,6 +2,13 @@
 
 桥接 **Dashpanels**模组 和 **Drive By Wire** 模组，使面板能够支持线控
 
+## 下载
+
+[![Release](https://img.shields.io/github/v/release/OnDreamQwQ/Drive-By-Dashpanels?label=%E4%B8%8B%E8%BD%BD&color=green)](https://github.com/OnDreamQwQ/Drive-By-Dashpanels/releases/latest)
+
+- **0.1.21** —— 当前正式版，线控 ⇄ 面板双向桥接
+- **0.2.x** —— 面板遥控终端的实验版本，投影还在调，暂不建议日常使用
+
 ## 使用方法
 
 ### 线缆 → 模块
