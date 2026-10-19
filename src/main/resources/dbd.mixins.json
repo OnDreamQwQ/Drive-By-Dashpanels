@@ -4,7 +4,9 @@
   "package": "io.github.ondreamqwq.dbd.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "AbstractPanelBlockEntityMixin"
+    "AbstractPanelBlockEntityMixin",
+    "network.WireAddConnectionPacketMixin",
+    "network.WireRemoveConnectionPacketMixin"
   ],
   "client": [
     "ClientWireNetworkHandlerMixin",
