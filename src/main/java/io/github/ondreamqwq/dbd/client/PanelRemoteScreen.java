@@ -196,6 +196,7 @@ public class PanelRemoteScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        pointerOnScreen();
         graphics.fill(0, 0, width, height, BACKDROP);
 
         if (panels.isEmpty()) {
@@ -775,7 +776,40 @@ public class PanelRemoteScreen extends Screen {
     @Override
     public void removed() {
         endHold();
+        restorePointer();
         super.removed();
+    }
+
+    /**
+     * Makes sure the system pointer is drawn while this screen is up.
+     *
+     * <p>Vanilla releases the mouse once, when the screen opens, and after that every mod is on its own.
+     * In a large pack some other mod puts the cursor back to {@code GLFW_CURSOR_DISABLED} every tick, and
+     * then this screen is usable - clicks land where the invisible pointer is - but you cannot see what
+     * you are aiming at. Checking once per frame costs a GLFW state query and only writes when the state
+     * actually drifted.
+     */
+    private void pointerOnScreen() {
+        Minecraft minecraft = Minecraft.getInstance();
+        long handle = minecraft.getWindow().getWindow();
+        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_NORMAL) {
+            minecraft.mouseHandler.releaseMouse();
+            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+        }
+    }
+
+    /**
+     * Hands the pointer back to the game on the way out.
+     *
+     * <p>Without this the cursor stays free after closing, and the camera stops turning: the player is
+     * left in the world with a pointer they cannot get rid of until they open another screen.
+     */
+    private void restorePointer() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.screen != null || minecraft.level == null) {
+            return;
+        }
+        minecraft.mouseHandler.grabMouse();
     }
 
     /**
