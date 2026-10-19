@@ -104,11 +104,10 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
 
     /**
      * The cable channels this center offers: one per sending module (one per multi-input sub-key),
-     * or just the picked one, plus the old name of every renamed module so a cable bound before the
-     * rename stays selectable.
+     * plus the old name of every renamed module so a cable bound before the rename stays selectable.
      */
     public List<String> channelNames() {
-        return channelList(publishable(valuesOf(collect())).keySet());
+        return channelList(valuesOf(collect()).keySet());
     }
 
     /** Server-side view of the cable network this center joined, or {@code null} when it has none. */
@@ -124,7 +123,7 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         }
         Map<String, Module> modules = collect();
         trackRenames(level, pos, modules);
-        Map<String, Integer> now = publishable(valuesOf(modules));
+        Map<String, Integer> now = valuesOf(modules);
         List<String> names = channelList(now.keySet());
         if (!names.equals(synced)) {
             synced = names;
@@ -145,12 +144,12 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         return List.copyOf(valuesOf(collect()).keySet());
     }
 
-    /** The module this center publishes, or an empty string when it publishes every sender. */
+    /** The module ticked in the Alt picker, or an empty string when nothing is ticked. */
     public String target() {
         return target;
     }
 
-    /** Narrow publishing down to one module. An empty name publishes every sender again. */
+    /** Remember the module ticked with Alt. An empty name clears the tick. */
     public void setTarget(String module) {
         String next = module == null ? "" : module;
         if (next.equals(target)) {
@@ -158,14 +157,6 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         }
         target = next;
         setChanged();
-    }
-
-    /** {@code now}, narrowed to the picked module when there is one and it still exists. */
-    private Map<String, Integer> publishable(Map<String, Integer> now) {
-        if (target.isEmpty() || !now.containsKey(target)) {
-            return now;
-        }
-        return Map.of(target, now.get(target));
     }
 
     @Override
