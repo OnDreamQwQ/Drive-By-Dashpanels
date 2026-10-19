@@ -406,6 +406,13 @@ public class PanelRemoteScreen extends Screen {
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
         active.renderGui(graphics, partialTick);
+        // The interaction draws its own reading in black and relies on the inverted blend of the dial
+        // underneath to look white; over a dark panel that reads as "nothing is there". A plain white copy
+        // right under the crosshair is always legible, whatever the module is.
+        String reading = holdHit == null ? null : readValue(holdHit.module());
+        if (reading != null) {
+            graphics.drawCenteredString(font, reading, width / 2, height / 2 + 22, 0xFFFFFFFF);
+        }
         graphics.flush();
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();
