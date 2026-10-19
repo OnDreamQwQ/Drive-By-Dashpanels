@@ -561,7 +561,36 @@ public class PanelRemoteScreen extends Screen {
         return null;
     }
 
+    /** Named getters worth trying when the saved tag does not describe the value on its own. */
+    private static final String[] VALUE_GETTERS = {"getAngle", "getPosition", "getValue", "getTurn", "isPressed", "isToggled"};
+
+    private static final Map<Class<?>, List<Method>> GETTERS = new HashMap<>();
+
     private static String analog(Module module) {
+        List<Method> getters = GETTERS.computeIfAbsent(module.getClass(), type -> {
+            List<Method> found = new ArrayList<>();
+            for (String name : VALUE_GETTERS) {
+                try {
+                    found.add(type.getMethod(name));
+                } catch (NoSuchMethodException ignored) {
+                    // that module simply does not expose this one
+                }
+            }
+            return found;
+        });
+        for (Method getter : getters) {
+            try {
+                Object value = getter.invoke(module);
+                if (value instanceof Float number) {
+                    return String.format(java.util.Locale.ROOT, "%.2f", number);
+                }
+                if (value != null) {
+                    return value.toString();
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // fall through to the next getter
+            }
+        }
         if (module instanceof IInput input) {
             return Integer.toString(input.getAnalog());
         }
