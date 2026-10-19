@@ -7,16 +7,24 @@ import com.mojang.math.Axis;
 import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import io.github.ondreamqwq.dbd.net.TerminalClickPacket;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import moth.boxxed.panels.api.module.Module;
+import moth.boxxed.panels.api.module.ModuleHitResult;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteraction;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteractionManager;
+import moth.boxxed.panels.api.module.io.IInput;
+import moth.boxxed.panels.api.module.tooltip.ModuleTooltipManager;
+import moth.boxxed.panels.api.module.tooltip.TooltipContext;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
-import moth.boxxed.panels.config.ClientConfig;
 import moth.boxxed.panels.content.panel.ceiling.CeilingPanelBlockEntity;
 import moth.boxxed.panels.content.panel.normal.PanelBlock;
 import moth.boxxed.panels.content.panel.wall.WallPanelBlockEntity;
+import moth.boxxed.panels.network.packet.DefaultModuleUpdatePacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -27,6 +35,7 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
@@ -34,6 +43,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
@@ -396,12 +406,37 @@ public class PanelRemoteScreen extends Screen {
             graphics.renderOutline(rect[0], rect[1], rect[2], rect[3],
                     holding != null ? HOLD_COLOR : HIGHLIGHT);
             graphics.pose().popPose();
-            graphics.drawCenteredString(font, hit.module().getName(), width / 2, height - 32, NAME_COLOR);
+            drawNameBox(graphics, hit);
         }
+        ModuleTooltipManager.guiFrame(hit != null);
         Component hint = holding != null
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
                 : Component.translatable("gui.drive_by_dashpanels.remote.hint");
         graphics.drawCenteredString(font, hint, width / 2, height - 16, HINT_COLOR);
+    }
+
+    /**
+     * Dashpanels' own name box: the module name plus whatever {@code IHoverTooltip} wants to add. It is
+     * faded in by {@code ModuleTooltipManager.guiFrame}, which we call every frame, and drawn before the
+     * frame is over so nothing the interaction puts on screen hides it.
+     */
+    private void drawNameBox(GuiGraphics graphics, Hit hit) {
+        graphics.flush();
+        ModuleTooltipManager.renderSelected(new TooltipContext(new ModuleHitResult(Vec3.ZERO)),
+                graphics, hit.module());
+        graphics.flush();
+        String value = readValue(hit.module());
+        if (value != null) {
+            graphics.drawCenteredString(font, value, width / 2, height - 32, NAME_COLOR);
+        }
+    }
+
+    /** The analog reading of an input module, when it publishes one; drives the number under the name. */
+    private static String readValue(Module module) {
+        if (module instanceof IInput input) {
+            return Integer.toString(input.getAnalog());
+        }
+        return null;
     }
 
     @Override
@@ -434,11 +469,6 @@ public class PanelRemoteScreen extends Screen {
         holdHit = null;
     }
 
-    /** True when the player picked vanilla's click-once-to-grab mode instead of press-and-hold. */
-    private static boolean toggleMode() {
-        return ClientConfig.CLICK_FOR_MODULE_HOLD.get();
-    }
-
     private static boolean isUseButton(int button) {
         return Minecraft.getInstance().options.keyUse.matchesMouse(button);
     }
@@ -453,9 +483,8 @@ public class PanelRemoteScreen extends Screen {
                 return true;
             }
             if (button == holdButton) {
-                if (toggleMode()) {
-                    endHold();
-                }
+                // Never latch: letting go of the button is what drops the module.
+                endHold();
                 return true;
             }
         }
@@ -513,7 +542,7 @@ public class PanelRemoteScreen extends Screen {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (holding != null && button == holdButton && !toggleMode()) {
+        if (holding != null && button == holdButton) {
             // Press to grab, let go to drop - what a real panel does with a momentary switch.
             endHold();
             return true;
@@ -604,15 +633,21 @@ public class PanelRemoteScreen extends Screen {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         }
 
-        // Ctrl+wheel zooms; a bare wheel turns the module it is pointing at.
+        // Ctrl+wheel zooms, Alt+wheel turns the module under the cursor, a bare wheel does nothing.
         if (hasControlDown()) {
             zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
             layout();
             return true;
         }
+        if (!hasAltDown()) {
+            return true;
+        }
 
         Hit hit = hitAt(mouseX, mouseY);
         if (hit == null) {
+            return true;
+        }
+        if (scrollModule(hit.module(), scrollY)) {
             return true;
         }
         if (scrollMode && holdHit != null && holdHit.module() == hit.module()) {
@@ -628,6 +663,40 @@ public class PanelRemoteScreen extends Screen {
         scrollMode = true;
         feedScroll(scrollY);
         return true;
+    }
+
+    /** Cached lookups for the modules that take discrete wheel steps; empty when the class has none. */
+    private static final Map<Class<?>, Optional<Method>> SCROLL_STEPS = new HashMap<>();
+
+    /**
+     * Dashpanels Extra's scroll wheel is stepped by the wheel itself rather than by a drag: it exposes
+     * {@code previewScrollStep(int)}, which returns the position the wheel would move to, and the
+     * server applies it from the {@code position} tag of a module update. One notch is one step.
+     */
+    private static boolean scrollModule(Module module, double scrollY) {
+        Optional<Method> cached = SCROLL_STEPS.computeIfAbsent(module.getClass(), type -> {
+            try {
+                return Optional.of(type.getMethod("previewScrollStep", int.class));
+            } catch (NoSuchMethodException e) {
+                return Optional.empty();
+            }
+        });
+        if (cached.isEmpty()) {
+            return false;
+        }
+        try {
+            Object next = cached.get().invoke(module, scrollY > 0.0D ? 1 : -1);
+            if (!(next instanceof Integer position)) {
+                return false;
+            }
+            CompoundTag tag = new CompoundTag();
+            tag.putInt("position", position);
+            PacketDistributor.sendToServer(
+                    new DefaultModuleUpdatePacket(module.getParentPos(), module.getName(), tag));
+            return true;
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
     }
 
     /**

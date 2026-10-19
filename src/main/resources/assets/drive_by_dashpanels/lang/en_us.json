@@ -8,7 +8,7 @@
   "gui.drive_by_dashpanels.channel_select.picked": "Channel selected: %s",
   "gui.drive_by_dashpanels.channel_select.hint": " (press %s to open the picker)",
   "gui.drive_by_dashpanels.remote.title": "Panel Remote",
-  "gui.drive_by_dashpanels.remote.hint": "Right click a module · wheel to adjust · drag to turn · Ctrl + wheel to zoom",
+  "gui.drive_by_dashpanels.remote.hint": "Right click a module · Alt + wheel to adjust · drag to turn · Ctrl + wheel to zoom",
   "gui.drive_by_dashpanels.remote.clicked": "Used %s",
   "gui.drive_by_dashpanels.remote.holding": "Drag to adjust · release to drop · ESC to stop",
   "gui.drive_by_dashpanels.remote.unavailable": "The panel is not loaded on this client",
