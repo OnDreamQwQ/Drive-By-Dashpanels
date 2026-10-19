@@ -13,6 +13,7 @@ import moth.boxxed.panels.api.module.Module;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteraction;
 import moth.boxxed.panels.api.module.interaction.ModuleHoldInteractionManager;
 import moth.boxxed.panels.api.panel.AbstractPanelBlockEntity;
+import moth.boxxed.panels.config.ClientConfig;
 import moth.boxxed.panels.content.panel.ceiling.CeilingPanelBlockEntity;
 import moth.boxxed.panels.content.panel.normal.PanelBlock;
 import moth.boxxed.panels.content.panel.wall.WallPanelBlockEntity;
@@ -71,6 +72,8 @@ public class PanelRemoteScreen extends Screen {
     private static final float DRAG_SCALE = 0.55F;
     private static final float MAX_PITCH = 80.0F;
     private static final double CLICK_SLOP = 3.0D;
+    /** Mouse travel handed to a hold interaction per scroll notch, in the same units a drag uses. */
+    private static final double SCROLL_NOTCH = 40.0D;
     private static final float CAMERA_DEPTH = 350.0F;
 
     private final BlockPos receiverPos;
@@ -94,6 +97,10 @@ public class PanelRemoteScreen extends Screen {
     /** Set while a module's own hold interaction owns the mouse. */
     private ModuleHoldInteraction<?> holding;
     private Hit holdHit;
+    private int holdButton = -1;
+
+    /** True when the hold was grabbed by the scroll wheel rather than by a held mouse button. */
+    private boolean scrollMode;
 
     private PanelRemoteScreen(BlockPos receiverPos) {
         super(Component.translatable("gui.drive_by_dashpanels.remote.title"));
@@ -180,6 +187,13 @@ public class PanelRemoteScreen extends Screen {
         }
 
         drawPanels(graphics, partialTick);
+        if (scrollMode) {
+            // The wheel grabbed a module; moving off it lets go, the same way lifting the mouse would.
+            Hit under = hitAt(mouseX, mouseY);
+            if (under == null || holdHit == null || under.module() != holdHit.module()) {
+                endHold();
+            }
+        }
         drawHold(graphics, partialTick);
         drawOverlay(graphics, mouseX, mouseY);
     }
@@ -360,9 +374,15 @@ public class PanelRemoteScreen extends Screen {
 
     private void drawHold(GuiGraphics graphics, float partialTick) {
         ModuleHoldInteraction<?> active = activeHold();
-        if (active != null) {
-            active.renderGui(graphics, partialTick);
+        if (active == null) {
+            return;
         }
+        // The value indicator an interaction draws (dial sprite, number under the crosshair) lands in the
+        // GUI batch, so the 3D panels are flushed out first and the indicator again afterwards: that way
+        // it is always readable on top of them.
+        graphics.flush();
+        active.renderGui(graphics, partialTick);
+        graphics.flush();
     }
 
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -403,6 +423,8 @@ public class PanelRemoteScreen extends Screen {
     }
 
     private void endHold() {
+        scrollMode = false;
+        holdButton = -1;
         if (holding == null) {
             return;
         }
@@ -412,26 +434,54 @@ public class PanelRemoteScreen extends Screen {
         holdHit = null;
     }
 
+    /** True when the player picked vanilla's click-once-to-grab mode instead of press-and-hold. */
+    private static boolean toggleMode() {
+        return ClientConfig.CLICK_FOR_MODULE_HOLD.get();
+    }
+
+    private static boolean isUseButton(int button) {
+        return Minecraft.getInstance().options.keyUse.matchesMouse(button);
+    }
+
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button != 0) {
-            return super.mouseClicked(mouseX, mouseY, button);
-        }
-        if (holding != null) {
-            // A second press while a module owns the mouse is handed to that module.
-            ModuleHoldInteraction<?> active = activeHold();
-            if (active != null && active.chooseInput(GLFW.GLFW_MOUSE_BUTTON_LEFT, GLFW.GLFW_PRESS)) {
+        ModuleHoldInteraction<?> active = activeHold();
+        if (active != null && holding != null) {
+            // The module owns the mouse now, so it gets the raw button first - pick, attack and use are
+            // all mapped inside the interaction, exactly as they are on a panel in the world.
+            if (active.chooseInput(button, GLFW.GLFW_PRESS)) {
                 return true;
             }
+            if (button == holdButton) {
+                if (toggleMode()) {
+                    endHold();
+                }
+                return true;
+            }
+        }
+
+        if (scrollMode) {
             endHold();
+        }
+
+        if (isUseButton(button)) {
+            Hit hit = hitAt(mouseX, mouseY);
+            if (hit != null) {
+                activate(hit);
+                holdButton = button;
+            }
             return true;
         }
-        dragging = true;
-        moved = false;
-        pressX = mouseX;
-        pressY = mouseY;
-        pressHit = hitAt(mouseX, mouseY);
-        return true;
+
+        if (button == 0) {
+            dragging = true;
+            moved = false;
+            pressX = mouseX;
+            pressY = mouseY;
+            return true;
+        }
+
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     @Override
@@ -463,19 +513,20 @@ public class PanelRemoteScreen extends Screen {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0) {
-            if (holding != null) {
-                endHold();
+        if (holding != null && button == holdButton && !toggleMode()) {
+            // Press to grab, let go to drop - what a real panel does with a momentary switch.
+            endHold();
+            return true;
+        }
+        if (holding != null) {
+            ModuleHoldInteraction<?> active = activeHold();
+            if (active != null && active.chooseInput(button, GLFW.GLFW_RELEASE)) {
                 return true;
             }
-            boolean wasDrag = moved;
-            Hit target = wasDrag ? null : pressHit;
+        }
+        if (button == 0) {
             dragging = false;
             moved = false;
-            pressHit = null;
-            if (target != null) {
-                activate(target);
-            }
             return true;
         }
         return super.mouseReleased(mouseX, mouseY, button);
@@ -552,9 +603,39 @@ public class PanelRemoteScreen extends Screen {
         if (scrollY == 0.0D) {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
         }
-        zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
-        layout();
+
+        // Ctrl+Alt+wheel zooms; a bare wheel turns the knob it is pointing at.
+        if (hasControlDown() && hasAltDown()) {
+            zoom = Mth.clamp(zoom + (float) scrollY * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
+            layout();
+            return true;
+        }
+
+        Hit hit = hitAt(mouseX, mouseY);
+        if (hit == null) {
+            return true;
+        }
+        if (scrollMode && holdHit != null && holdHit.module() == hit.module()) {
+            feedScroll(scrollY);
+            return true;
+        }
+        endHold();
+        // Start the module the same way a press would, then drive it with the wheel instead of the mouse.
+        activate(hit);
+        if (holding == null) {
+            return true;
+        }
+        scrollMode = true;
+        feedScroll(scrollY);
         return true;
+    }
+
+    /** Hands one notch of wheel travel to the interaction the way a drag of the same length would. */
+    private void feedScroll(double scrollY) {
+        ModuleHoldInteraction<?> active = activeHold();
+        if (active != null) {
+            active.activeMouseMove(SCROLL_NOTCH * scrollY, 0.0D);
+        }
     }
 
     @Override
