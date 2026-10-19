@@ -1,4 +1,4 @@
-# Drive By Dashpanels
+”# Drive By Dashpanels
 
 桥接 **Dashpanels**模组 和 **Drive By Wire** 模组，使面板能够支持线控
 
@@ -82,3 +82,4 @@ libs/
 - ~~添加选择ui~~ 已完成
 - ~~线控对模块充能~~ 已完成
 - 制作远程控制终端
+- 制作镜像面板
