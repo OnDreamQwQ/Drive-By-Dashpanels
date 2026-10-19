@@ -115,7 +115,7 @@ public class ChannelSelectScreen extends Screen {
         // Same as the panel linker: no shadow, so the dark brown title sits flat on the gold bar.
         String title = this.title.getString();
         int titleX = (WINDOW_WIDTH - this.font.width(title)) / 2;
-        graphics.drawString(this.font, title, this.leftPos + titleX, this.topPos + 4, TITLE_COLOR, false);
+        graphics.drawString(this.font, title, this.leftPos + titleX, this.topPos + 1, TITLE_COLOR, false);
 
         graphics.enableScissor(this.leftPos, this.topPos + LIST_TOP,
                 this.leftPos + WINDOW_WIDTH, this.topPos + LIST_BOTTOM);

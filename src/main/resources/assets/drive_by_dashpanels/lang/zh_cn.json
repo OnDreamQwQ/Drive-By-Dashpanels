@@ -3,5 +3,8 @@
   "block.drive_by_dashpanels.panel_link_center": "面板链接中心",
   "gui.drive_by_dashpanels.channel_select": "选择模块",
   "gui.drive_by_dashpanels.channel_select.empty": "这个面板上没有可以发送信号的模块",
-  "gui.drive_by_dashpanels.channel_select.picked": "已选择频道：%s"
+  "gui.drive_by_dashpanels.channel_select.picked": "已选择频道：%s",
+  "gui.drive_by_dashpanels.channel_select.hint": "（按 %s 打开选择器）",
+  "key.drive_by_dashpanels.picker": "打开面板链接中心选择器",
+  "key.categories.drive_by_dashpanels": "面板链接"
 }

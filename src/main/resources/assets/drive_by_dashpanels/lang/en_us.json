@@ -3,5 +3,8 @@
   "block.drive_by_dashpanels.panel_link_center": "Panel Link Center",
   "gui.drive_by_dashpanels.channel_select": "Select a module",
   "gui.drive_by_dashpanels.channel_select.empty": "No module on this panel sends a signal",
-  "gui.drive_by_dashpanels.channel_select.picked": "Channel selected: %s"
+  "gui.drive_by_dashpanels.channel_select.picked": "Channel selected: %s",
+  "gui.drive_by_dashpanels.channel_select.hint": " (press %s to open the picker)",
+  "key.drive_by_dashpanels.picker": "Open the panel link center picker",
+  "key.categories.drive_by_dashpanels": "Panel Link"
 }
