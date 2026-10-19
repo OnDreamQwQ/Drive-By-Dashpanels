@@ -2,7 +2,9 @@ package io.github.ondreamqwq.dbd.mixin.client;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -30,9 +32,11 @@ import net.minecraft.world.phys.AABB;
  *   <li>the frame is inflated by a hair around the module's own centre, so the two outlines sit at
  *       slightly different depths instead of fighting for the same pixels (that fight is what looked
  *       like flickering);</li>
- *   <li>the line width is raised and the line batch is flushed while it is still raised, because
- *       line width is a draw-time state -- setting it around the call does nothing if the vertices
- *       are only flushed at the end of the frame.</li>
+ *   <li>the line width is raised for the whole panel and the line batch is flushed once on the way
+ *       out, because line width is a draw-time state: setting it around a single call does nothing
+ *       unless the vertices are flushed while it is still raised. Flushing per module instead would
+ *       mean one full batch break per module per frame, which is the expensive way to get the same
+ *       picture.</li>
  * </ul>
  */
 @Mixin(value = AbstractPanelRenderer.class, remap = false)
@@ -42,6 +46,21 @@ public abstract class AbstractPanelRendererMixin {
     private static final float INFLATE = 1.02F;
 
     private static final float LINE_WIDTH = 2.5F;
+
+    /** Line width is a draw-time state, so it has to cover the draw call for the whole panel. */
+    @Inject(method = "renderModules", at = @At("HEAD"), remap = false)
+    private void dbd$widenLines(AbstractPanelBlockEntity panel, float partialTick, PoseStack pose,
+            MultiBufferSource buffer, int light, int overlay, CallbackInfo ci) {
+        RenderSystem.lineWidth(LINE_WIDTH);
+    }
+
+    /** One flush for every outline of this panel, then put the shared state back. */
+    @Inject(method = "renderModules", at = @At("RETURN"), remap = false)
+    private void dbd$flushLines(AbstractPanelBlockEntity panel, float partialTick, PoseStack pose,
+            MultiBufferSource buffer, int light, int overlay, CallbackInfo ci) {
+        Minecraft.getInstance().renderBuffers().bufferSource().endBatch(RenderType.lines());
+        RenderSystem.lineWidth(1.0F);
+    }
 
     @Redirect(
             method = "renderModules",
@@ -70,14 +89,7 @@ public abstract class AbstractPanelRendererMixin {
         pose.translate(cx, cy, cz);
         pose.scale(INFLATE, INFLATE, INFLATE);
         pose.translate(-cx, -cy, -cz);
-
-        RenderSystem.lineWidth(LINE_WIDTH);
         module.renderOutline(pose, buffer, partialTick, color);
-        // Flush now, while the width is still in effect; renderOutline queues into the shared line
-        // buffer, which would otherwise only be drawn at the end of the frame at the default width.
-        Minecraft.getInstance().renderBuffers().bufferSource().endBatch(RenderType.lines());
-        RenderSystem.lineWidth(1.0F);
-
         pose.popPose();
     }
 }

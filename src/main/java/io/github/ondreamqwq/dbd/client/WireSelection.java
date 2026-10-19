@@ -128,12 +128,14 @@ public final class WireSelection {
      * so a cable picked up elsewhere never lights up unrelated modules.
      */
     public static int frameColor(AbstractPanelBlockEntity panel, Module module) {
-        List<PanelModuleBinding> bindings = PanelBindings.bindings(panel, module.getName());
-        if (bindings.isEmpty()) {
-            return 0;
-        }
+        // Checked before the binding lookup: this runs once per module per frame, and with no cable
+        // in hand (the normal case) the answer is "draw nothing" without touching the table at all.
         BlockPos source = source();
         if (source == null) {
+            return 0;
+        }
+        List<PanelModuleBinding> bindings = PanelBindings.bindings(panel, module.getName());
+        if (bindings.isEmpty()) {
             return 0;
         }
         String channel = channel();

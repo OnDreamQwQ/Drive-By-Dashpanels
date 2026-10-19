@@ -71,16 +71,22 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
     private static final int MAX_ALIASES = 128;
 
     /** Values published on the previous tick, used to clear channels whose module went away. */
-    private List<String> published = List.of();
+    private Map<String, Integer> published = Map.of();
 
     /** Channel names last pushed to clients, so the update tag is only resent when they change. */
     private List<String> synced = List.of();
+
+    /** Cable channels computed on the last tick, so a picker request does not rescan the network. */
+    private List<String> names = List.of();
 
     /**
      * Last name each module instance was seen under. {@code ModuleMap#rename} keeps the instance and
      * only moves the key, so a changed name for the same instance is exactly a rename.
      */
     private final Map<Module, String> seenNames = new IdentityHashMap<>();
+
+    /** Scratch set of the instances that still exist, reused so a tick allocates nothing. */
+    private final IdentityHashMap<Module, Boolean> alive = new IdentityHashMap<>();
 
     /** Old channel name -> the module name it now stands for. Persisted, so a rename outlives a reload. */
     private final Map<String, String> aliases = new LinkedHashMap<>();
@@ -111,9 +117,10 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         Map<String, Module> modules = collect();
         trackRenames(level, pos, modules);
         Map<String, Integer> now = valuesOf(modules);
-        List<String> names = channelList(now.keySet());
-        if (!names.equals(synced)) {
-            synced = names;
+        List<String> channels = channelList(now.keySet());
+        names = channels;
+        if (!channels.equals(synced)) {
+            synced = channels;
             level.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
         }
         publish(level, pos, now);
@@ -130,7 +137,9 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
      * putting one on the wire would hand the cable a value that always reads 0.
      */
     public List<String> senderChannels() {
-        return channelNames();
+        // Cached by the last tick: a picker request must not rescan the whole cable network, and a
+        // center that has not ticked yet falls back to one scan rather than reporting nothing.
+        return names.isEmpty() ? channelNames() : names;
     }
 
     @Override
@@ -139,7 +148,7 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         if (level != null && !level.isClientSide) {
             BlockPos pos = getBlockPos();
             if (WireNetworkManager.get(level) != null) {
-                for (String channel : published) {
+                for (String channel : published.keySet()) {
                     WireNetworkManager.trySetSignalAt(level, pos, channel, 0);
                 }
                 // The block is gone, so every cable that left it is garbage. Drive By Wire keeps
@@ -147,7 +156,8 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 // they are dropped one sink at a time.
                 removeConnections(level, pos, channel -> true);
             }
-            published = List.of();
+            published = Map.of();
+            names = List.of();
         }
         super.remove();
     }
@@ -186,8 +196,9 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
         // removeConnectionsOnModuleLoss asks for the links to be deleted: tearing a module down and
         // later putting a new one back has to revive the cable without a re-bind, and pruning here
         // was exactly what broke that. Only the instance bookkeeping is dropped, so a destroyed
-        // module does not linger in memory.
-        IdentityHashMap<Module, Boolean> alive = new IdentityHashMap<>();
+        // module does not linger in memory. The scratch map is reused, so a quiet tick allocates
+        // nothing.
+        alive.clear();
         for (Module module : modules.values()) {
             alive.put(module, Boolean.TRUE);
         }
@@ -347,7 +358,7 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 outgoing.putIfAbsent(alias.getKey(), value);
             }
         }
-        for (String stale : published) {
+        for (String stale : published.keySet()) {
             if (outgoing.containsKey(stale)) {
                 continue;
             }
@@ -358,10 +369,16 @@ public class PanelLinkCenterBlockEntity extends ModulesNetworkMember {
                 removeConnections(level, pos, stale::equals);
             }
         }
+        // Only channels whose value actually moved are written. A quiet channel still costs a map
+        // update and one node key per sink inside Drive By Wire, so this is the difference between
+        // "nothing happened, nothing sent" and "every channel rewritten every tick".
         for (Map.Entry<String, Integer> entry : outgoing.entrySet()) {
+            if (entry.getValue().equals(published.get(entry.getKey()))) {
+                continue;
+            }
             WireNetworkManager.trySetSignalAt(level, pos, entry.getKey(), entry.getValue());
         }
-        published = List.copyOf(outgoing.keySet());
+        published = Map.copyOf(outgoing);
     }
 
     /**

@@ -2,6 +2,7 @@ package io.github.ondreamqwq.dbd.content;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,29 +24,37 @@ import net.minecraft.world.level.Level;
 /**
  * Wire &rarr; module bindings, keyed by the panel block entity itself.
  *
- * <p>Keying on the block entity instance (not on a position) means the server,
- * the client and the NBT round trip all use one lookup with no level or
- * dimension bookkeeping: the entity already knows where it is.
+ * <p>Keying on the block entity instance (not on a position) means the server, the client and the
+ * NBT round trip all use one lookup with no level or dimension bookkeeping: the entity already knows
+ * where it is.
  *
  * <p>Both directions are many-to-many:
  *
  * <ul>
  *   <li>one source channel may feed several modules (splitting a cable);</li>
- *   <li>one module may listen to several source channels at once, in which case
- *       the effective value is the <b>largest</b> of them -- the same rule redstone
- *       uses when two wires meet at one torch.</li>
+ *   <li>one module may listen to several source channels at once, in which case the effective value
+ *       is the <b>largest</b> of them -- the same rule redstone uses when two wires meet at one
+ *       torch.</li>
  * </ul>
  *
- * <p>The mapping is persisted in the panel's own block entity data, which also
- * gives client sync for free: the vanilla update tag carries it, so a player who
- * comes into view immediately knows which modules are bound and can draw their
- * outlines.
+ * <p>The mapping is persisted in the panel's own block entity data, which also gives client sync for
+ * free: the vanilla update tag carries it, so a player who comes into view immediately knows which
+ * modules are bound and can draw their outlines.
+ *
+ * <h2>Why every value is immutable</h2>
+ *
+ * <p>{@link #bindings} is called from the render thread once per module <b>per frame</b>, while the
+ * server thread mutates the table on player clicks. Copying on read would allocate a list per module
+ * per frame; sharing a mutable list would risk a concurrent modification. So writes never touch a
+ * published map: they build a new one, publish it, and every read is then just a map lookup with no
+ * copy and no allocation.
  */
 public final class PanelBindings {
 
     private static final String TAG_BINDINGS = "dbd:Bindings";
     private static final String TAG_MODULE = "module";
 
+    /** Published snapshots: never mutated after {@code put}. */
     private static final Map<AbstractPanelBlockEntity, Map<String, List<PanelModuleBinding>>> STORE =
             Collections.synchronizedMap(new WeakHashMap<>());
 
@@ -53,38 +62,39 @@ public final class PanelBindings {
     private static final Map<AbstractPanelBlockEntity, Map<String, Integer>> LAST =
             Collections.synchronizedMap(new WeakHashMap<>());
 
+    /**
+     * Wire values per source position, valid for one server tick only.
+     *
+     * <p>Drive By Wire's {@code getSourceSignals} returns a fresh {@code Map.copyOf} on every call,
+     * and one source usually feeds several modules, so without this cache a panel with four bound
+     * modules on one cable would copy that map four times a tick.
+     */
+    private static final Map<Long, Map<String, Integer>> SIGNALS = new HashMap<>();
+
+    /** The level {@link #SIGNALS} was filled from; signals never cross a dimension. */
+    private static ServerLevel signalsLevel;
+
     private PanelBindings() {
     }
 
-    /** A deep-enough copy: the lists are immutable snapshots, callers never mutate the store. */
+    /** The whole table for one panel. Immutable; safe to hold for the duration of a frame. */
     public static Map<String, List<PanelModuleBinding>> of(AbstractPanelBlockEntity panel) {
-        synchronized (STORE) {
-            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
-            if (bound == null || bound.isEmpty()) {
-                return Map.of();
-            }
-            Map<String, List<PanelModuleBinding>> copy = new LinkedHashMap<>();
-            for (Map.Entry<String, List<PanelModuleBinding>> entry : bound.entrySet()) {
-                copy.put(entry.getKey(), List.copyOf(entry.getValue()));
-            }
-            return Collections.unmodifiableMap(copy);
-        }
+        Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
+        return bound == null ? Map.of() : bound;
     }
 
     public static boolean isEmpty(AbstractPanelBlockEntity panel) {
         return of(panel).isEmpty();
     }
 
-    /** Every source this module listens to. */
+    /** Every source this module listens to. Immutable; no copy is made. */
     public static List<PanelModuleBinding> bindings(AbstractPanelBlockEntity panel, String module) {
-        synchronized (STORE) {
-            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
-            if (bound == null) {
-                return List.of();
-            }
-            List<PanelModuleBinding> list = bound.get(module);
-            return list == null || list.isEmpty() ? List.of() : List.copyOf(list);
+        Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
+        if (bound == null) {
+            return List.of();
         }
+        List<PanelModuleBinding> list = bound.get(module);
+        return list == null ? List.of() : list;
     }
 
     /** First source of a module, or {@code null}. Prefer {@link #bindings} when all matter. */
@@ -105,14 +115,21 @@ public final class PanelBindings {
     /** Adds one source to a module. Returns {@code false} if that pair was already there. */
     public static boolean put(AbstractPanelBlockEntity panel, String module, PanelModuleBinding binding) {
         synchronized (STORE) {
-            Map<String, List<PanelModuleBinding>> bound = STORE.computeIfAbsent(panel, key -> new LinkedHashMap<>());
-            List<PanelModuleBinding> list = bound.computeIfAbsent(module, key -> new ArrayList<>());
-            for (PanelModuleBinding existing : list) {
-                if (existing.source().equals(binding.source()) && existing.channel().equals(binding.channel())) {
-                    return false;
+            Map<String, List<PanelModuleBinding>> current = STORE.get(panel);
+            List<PanelModuleBinding> list = current == null ? null : current.get(module);
+            if (list != null) {
+                for (PanelModuleBinding existing : list) {
+                    if (existing.source().equals(binding.source()) && existing.channel().equals(binding.channel())) {
+                        return false;
+                    }
                 }
             }
-            list.add(binding);
+            List<PanelModuleBinding> grown = new ArrayList<>(list == null ? List.of() : list);
+            grown.add(binding);
+            Map<String, List<PanelModuleBinding>> next =
+                    current == null ? new LinkedHashMap<>() : new LinkedHashMap<>(current);
+            next.put(module, List.copyOf(grown));
+            publish(panel, next);
             return true;
         }
     }
@@ -120,45 +137,59 @@ public final class PanelBindings {
     /** Drops one source from a module, leaving its other sources alone. */
     public static boolean removeBinding(AbstractPanelBlockEntity panel, String module, BlockPos source, String channel) {
         synchronized (STORE) {
-            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
-            if (bound == null) {
+            Map<String, List<PanelModuleBinding>> current = STORE.get(panel);
+            if (current == null) {
                 return false;
             }
-            List<PanelModuleBinding> list = bound.get(module);
+            List<PanelModuleBinding> list = current.get(module);
             if (list == null) {
                 return false;
             }
-            boolean removed = list.removeIf(
-                    binding -> binding.source().equals(source) && binding.channel().equals(channel));
-            if (list.isEmpty()) {
-                bound.remove(module);
+            List<PanelModuleBinding> left = new ArrayList<>(list.size());
+            for (PanelModuleBinding binding : list) {
+                if (!(binding.source().equals(source) && binding.channel().equals(channel))) {
+                    left.add(binding);
+                }
             }
-            if (bound.isEmpty()) {
-                STORE.remove(panel);
+            if (left.size() == list.size()) {
+                return false;
             }
-            return removed;
+            Map<String, List<PanelModuleBinding>> next = new LinkedHashMap<>(current);
+            if (left.isEmpty()) {
+                next.remove(module);
+            } else {
+                next.put(module, List.copyOf(left));
+            }
+            publish(panel, next);
+            return true;
         }
     }
 
     /** Drops every source of one module. */
     public static boolean remove(AbstractPanelBlockEntity panel, String module) {
         synchronized (STORE) {
-            Map<String, List<PanelModuleBinding>> bound = STORE.get(panel);
-            if (bound == null) {
+            Map<String, List<PanelModuleBinding>> current = STORE.get(panel);
+            if (current == null || !current.containsKey(module)) {
                 return false;
             }
-            List<PanelModuleBinding> old = bound.remove(module);
-            if (bound.isEmpty()) {
-                STORE.remove(panel);
-            }
-            return old != null && !old.isEmpty();
+            Map<String, List<PanelModuleBinding>> next = new LinkedHashMap<>(current);
+            next.remove(module);
+            publish(panel, next);
+            return true;
+        }
+    }
+
+    /** Replace the published snapshot; an empty table drops the entry entirely. */
+    private static void publish(AbstractPanelBlockEntity panel, Map<String, List<PanelModuleBinding>> next) {
+        if (next.isEmpty()) {
+            STORE.remove(panel);
+        } else {
+            STORE.put(panel, Collections.unmodifiableMap(next));
         }
     }
 
     public static void forget(AbstractPanelBlockEntity panel) {
-        synchronized (STORE) {
-            STORE.remove(panel);
-        }
+        STORE.remove(panel);
         LAST.remove(panel);
     }
 
@@ -213,19 +244,19 @@ public final class PanelBindings {
                 sources.add(binding);
             }
         }
-        synchronized (STORE) {
-            if (bound.isEmpty()) {
-                STORE.remove(panel);
-            } else {
-                STORE.put(panel, bound);
-            }
+        Map<String, List<PanelModuleBinding>> next = new LinkedHashMap<>();
+        for (Map.Entry<String, List<PanelModuleBinding>> entry : bound.entrySet()) {
+            next.put(entry.getKey(), List.copyOf(entry.getValue()));
         }
+        publish(panel, next);
     }
 
     // -------------------------------------------------------------------- delivery
 
     /** Server tick: push the effective wire value into every bound module. */
     public static void deliver() {
+        SIGNALS.clear();
+        signalsLevel = null;
         List<AbstractPanelBlockEntity> snapshot = new ArrayList<>(panels());
         for (AbstractPanelBlockEntity panel : snapshot) {
             if (panel.isRemoved()) {
@@ -353,19 +384,19 @@ public final class PanelBindings {
         Map<String, Integer> last;
         synchronized (LAST) {
             last = LAST.computeIfAbsent(panel, key -> new LinkedHashMap<>());
+            Integer previous = last.get(moduleName);
+            if (previous != null && previous == value) {
+                return;
+            }
+            last.put(moduleName, value);
         }
-        Integer previous = last.get(moduleName);
-        if (previous != null && previous == value) {
-            return;
-        }
-        last.put(moduleName, value);
         output.setAnalog(value);
         panel.networkUpdate(panel.getOrCreate());
     }
 
     private static int valueOf(ServerLevel level, PanelModuleBinding binding) {
-        WireNetworkManager manager = WireNetworkManager.get(level);
-        Integer raw = manager.getSourceSignals(binding.source()).get(binding.channel());
+        Map<String, Integer> signals = signals(level, binding.source());
+        Integer raw = signals.get(binding.channel());
         if (raw == null) {
             if (WireNetworkManager.WORLD_CHANNEL.equals(binding.channel())) {
                 raw = WireNetworkManager.computeWorldSignal(level, binding.source());
@@ -374,6 +405,22 @@ public final class PanelBindings {
             }
         }
         return Mth.clamp(raw, 0, 15);
+    }
+
+    /** This tick's wire values for one source, fetched at most once per tick. */
+    private static Map<String, Integer> signals(ServerLevel level, BlockPos source) {
+        if (level != signalsLevel) {
+            SIGNALS.clear();
+            signalsLevel = level;
+        }
+        long key = source.asLong();
+        Map<String, Integer> cached = SIGNALS.get(key);
+        if (cached == null) {
+            WireNetworkManager manager = WireNetworkManager.get(level);
+            cached = manager == null ? Map.of() : manager.getSourceSignals(source);
+            SIGNALS.put(key, cached);
+        }
+        return cached;
     }
 
     /** Forget a module's cached value, e.g. after its binding changed. */
