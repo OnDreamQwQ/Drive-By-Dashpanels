@@ -145,17 +145,20 @@ public class PanelLinkCenterBlock extends ModulesNetworkMemberBlock implements e
             // wiring whenever a chunk with the panels unloads and the network looks empty for a tick.
             int aliases = center.clearAliases();
             int links = center.dropDanglingConnections();
-            text = "面板链接中心：已清理 " + aliases + " 条改名记录、" + links + " 条失效连接";
+            boolean unbound = center.clearTarget();
+            text = "面板链接中心：已清理 " + aliases + " 条改名记录、" + links + " 条失效连接"
+                    + (unbound ? "，并解除了接收目标" : "");
         } else if (center.network() == null) {
             text = "面板链接中心：没有接入 Dashpanels 网络（四周要有线缆或面板，且必须水平相邻）";
         } else {
             List<String> names = center.channelNames();
+            String receiving = center.targetModule().isEmpty() ? "" : "，接收目标 " + center.targetModule();
             if (names.isEmpty()) {
-                text = "面板链接中心：已接入网络，但网络里没有可读取的模块";
+                text = "面板链接中心：已接入网络，但网络里没有可读取的模块" + receiving;
             } else {
                 List<String> shown = names.size() > REPORT_LIMIT ? names.subList(0, REPORT_LIMIT) : names;
                 text = "面板链接中心：" + names.size() + " 个频道 -> " + String.join(", ", shown)
-                        + (names.size() > REPORT_LIMIT ? " ..." : "");
+                        + (names.size() > REPORT_LIMIT ? " ..." : "") + receiving;
             }
         }
         player.displayClientMessage(Component.literal(text), false);
