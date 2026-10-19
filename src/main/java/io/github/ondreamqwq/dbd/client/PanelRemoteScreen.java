@@ -51,6 +51,7 @@ import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.opengl.GL11;
 
 /**
  * The screen behind the panel remote: every panel the receiver is wired to, drawn together as the one
@@ -402,20 +403,9 @@ public class PanelRemoteScreen extends Screen {
         if (active == null) {
             return;
         }
-        graphics.flush();
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
+        beginTopPass(graphics);
         active.renderGui(graphics, partialTick);
-        // The interaction draws its own reading in black and relies on the inverted blend of the dial
-        // underneath to look white; over a dark panel that reads as "nothing is there". A plain white copy
-        // right under the crosshair is always legible, whatever the module is.
-        String reading = holdHit == null ? null : readValue(holdHit.module());
-        if (reading != null) {
-            graphics.drawCenteredString(font, reading, width / 2, height / 2 + 22, 0xFFFFFFFF);
-        }
-        graphics.flush();
-        RenderSystem.depthMask(true);
-        RenderSystem.enableDepthTest();
+        endTopPass(graphics);
     }
 
     private void drawOverlay(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -424,9 +414,7 @@ public class PanelRemoteScreen extends Screen {
         // when its buffer is flushed - which happens at the end of the frame unless asked otherwise. So the
         // overlay is flushed here, by hand, while the depth test is off; re-enabling it before the flush was
         // what kept the name box hidden behind the model.
-        graphics.flush();
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
+        beginTopPass(graphics);
         if (hit != null) {
             // The rectangle is measured again every frame instead of reusing the one stored in the hit,
             // so the outline keeps hugging the module while the view is zoomed or turned.
@@ -443,9 +431,7 @@ public class PanelRemoteScreen extends Screen {
                 ? Component.translatable("gui.drive_by_dashpanels.remote.holding")
                 : Component.translatable("gui.drive_by_dashpanels.remote.hint");
         graphics.drawCenteredString(font, hint, width / 2, height - 16, HINT_COLOR);
-        graphics.flush();
-        RenderSystem.depthMask(true);
-        RenderSystem.enableDepthTest();
+        endTopPass(graphics);
     }
 
     /**
@@ -459,6 +445,26 @@ public class PanelRemoteScreen extends Screen {
     }
 
     /**
+     * Starts a pass that has to land on top of the 3D panels.
+     *
+     * <p>Turning the depth test off by hand is not enough: every RenderType re-applies its own depth state
+     * when its batch is drawn, so a type that asks for LEQUAL quietly turns the test back on. That is why the
+     * dial (a GUI type that never depth tests) showed while its number (text) was swallowed by the model.
+     * Clearing the depth buffer the panels filled in makes any depth test pass instead.
+     */
+    private void beginTopPass(GuiGraphics graphics) {
+        graphics.flush();
+        RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
+    }
+
+    private void endTopPass(GuiGraphics graphics) {
+        graphics.flush();
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
+    }
+    /**
      * The crosshair, drawn last so it sits above the panels instead of behind them. A module that asked for
      * the crosshair to be hidden (a joystick being dragged) hides this one too, exactly like the real one.
      */
@@ -466,14 +472,10 @@ public class PanelRemoteScreen extends Screen {
         if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
             return;
         }
-        graphics.flush();
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
+        beginTopPass(graphics);
         graphics.blitSprite(CROSSHAIR, (width - CROSSHAIR_SIZE) / 2, (height - CROSSHAIR_SIZE) / 2,
                 CROSSHAIR_SIZE, CROSSHAIR_SIZE);
-        graphics.flush();
-        RenderSystem.depthMask(true);
-        RenderSystem.enableDepthTest();
+        endTopPass(graphics);
     }
     /**
      * Name, a live reading and how the module is being driven, drawn by us right above the module.
