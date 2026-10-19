@@ -3,8 +3,12 @@
   "minVersion": "0.8",
   "package": "io.github.ondreamqwq.dbd.mixin",
   "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "AbstractPanelBlockEntityMixin"
+  ],
   "client": [
-    "ClientWireNetworkHandlerMixin"
+    "ClientWireNetworkHandlerMixin",
+    "client.AbstractPanelRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1
