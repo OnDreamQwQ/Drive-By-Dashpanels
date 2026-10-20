@@ -2,6 +2,7 @@ package io.github.ondreamqwq.dbd.client;
 
 import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.math.Axis;
@@ -308,7 +309,12 @@ public class PanelRemoteScreen extends Screen {
 
     private void drawPanels(GuiGraphics graphics, float partialTick) {
         Minecraft minecraft = Minecraft.getInstance();
-        MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
+        // Our own buffer source instead of the shared one. A BufferSource we created is empty to begin with,
+        // and getBuffer() ends the previous shared type whenever the type changes - so after the models are
+        // drawn there is at most one pending builder, and a single endBatch() submits it (immediate sources
+        // have no fixed buffers). Nothing can survive into the end of the frame, where it used to be
+        // submitted after the overlay and paint the panels on top of the crosshair.
+        MultiBufferSource.BufferSource buffers = ownBuffers();
         PoseStack pose = graphics.pose();
 
         Matrix4f projected = perspectiveProjection();
@@ -323,44 +329,57 @@ public class PanelRemoteScreen extends Screen {
         RenderSystem.enableDepthTest();
         Lighting.setupForFlatItems();
 
-        pose.pushPose();
-        assemblyPose(pose);
-        for (AbstractPanelBlockEntity panel : panels) {
-            BlockPos pos = panel.getBlockPos();
+        try {
             pose.pushPose();
-            panelOffset(pose, pos);
-            // The board itself. Dashpanels renders it as an ordinary block model, not through the block
-            // entity renderer, so without this the screen shows modules floating in nothing.
-            minecraft.getBlockRenderer().renderSingleBlock(
-                    panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                    panel.getModelData(), null);
-
-            pose.pushPose();
-            pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
-            panel.renderTransform(pose);
-            for (Module module : panel.getModules().values()) {
+            assemblyPose(pose);
+            for (AbstractPanelBlockEntity panel : panels) {
+                BlockPos pos = panel.getBlockPos();
                 pose.pushPose();
-                panel.getIndividualModuleTransform().accept(module, pose);
-                pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
-                        (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
-                module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+                panelOffset(pose, pos);
+                // The board itself. Dashpanels renders it as an ordinary block model, not through the block
+                // entity renderer, so without this the screen shows modules floating in nothing.
+                minecraft.getBlockRenderer().renderSingleBlock(
+                        panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
+                        panel.getModelData(), null);
+
+                pose.pushPose();
+                pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
+                panel.renderTransform(pose);
+                for (Module module : panel.getModules().values()) {
+                    pose.pushPose();
+                    panel.getIndividualModuleTransform().accept(module, pose);
+                    pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
+                            (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
+                    module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+                    pose.popPose();
+                }
+                pose.popPose();
                 pose.popPose();
             }
             pose.popPose();
-            pose.popPose();
+        } finally {
+            // Submit now, while the panels are still the thing being drawn.
+            buffers.endBatch();
         }
-        pose.popPose();
 
-        // Every type a model might have used has to be submitted now, while the panels are being drawn.
-        // Anything left in a buffer is submitted at the end of the frame instead - after the overlay -
-        // which is exactly how the panels kept ending up painted on top of the crosshair and the frames.
-        drainBuffers(buffers);
+        drainBuffers(Minecraft.getInstance().renderBuffers().bufferSource());
 
         Lighting.setupFor3DItems();
         RenderSystem.disableDepthTest();
         if (savedProjection != null) {
             RenderSystem.setProjectionMatrix(savedProjection, savedSorting);
         }
+    }
+
+    private ByteBufferBuilder ownPool;
+
+    private MultiBufferSource.BufferSource ownBuffers() {
+        if (ownPool == null) {
+            ownPool = new ByteBufferBuilder(1 << 20);
+        } else {
+            ownPool.clear();
+        }
+        return MultiBufferSource.immediate(ownPool);
     }
 
     /** The module under the cursor, and the rectangle it was found in. */
