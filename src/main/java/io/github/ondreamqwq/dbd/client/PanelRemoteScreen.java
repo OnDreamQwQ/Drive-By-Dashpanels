@@ -340,36 +340,23 @@ public class PanelRemoteScreen extends Screen {
         try {
             pose.pushPose();
             assemblyPose(pose);
-            for (AbstractPanelBlockEntity panel : panels) {
-                BlockPos pos = panel.getBlockPos();
-                pose.pushPose();
-                panelOffset(pose, pos);
-                // The board itself. Dashpanels renders it as an ordinary block model, not through the block
-                // entity renderer, so without this the screen shows modules floating in nothing.
-                RenderSystem.enableDepthTest();
-                RenderSystem.depthMask(true);
-                minecraft.getBlockRenderer().renderSingleBlock(
-                        panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
-                        panel.getModelData(), null);
 
-                pose.pushPose();
-                pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
-                panel.renderTransform(pose);
-                for (Module module : panel.getModules().values()) {
-                    pose.pushPose();
-                    panel.getIndividualModuleTransform().accept(module, pose);
-                    pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
-                            (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
-                    // Some module renderers switch depth state for their own sprites and do not put it
-                    // back, so the state is asserted again for every element instead of once per frame.
-                    RenderSystem.enableDepthTest();
-                    RenderSystem.depthMask(true);
-                    module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
-                    pose.popPose();
-                }
-                pose.popPose();
-                pose.popPose();
+            // Boards first, so every surface is in the depth buffer before a single module is drawn.
+            for (AbstractPanelBlockEntity panel : panels) {
+                drawBoard(pose, panel, buffers);
             }
+            // Then every module of every panel.
+            for (AbstractPanelBlockEntity panel : panels) {
+                drawModules(pose, panel, buffers, partialTick);
+            }
+            // And the boards once more on top. A module renderer may pick a render type that ignores depth
+            // entirely - several do - and then nothing stops a module of a far panel from painting over a
+            // near board. Replaying the boards with depth testing on puts the near surface back in front;
+            // modules that stand off their own board survive, because they really are closer.
+            for (AbstractPanelBlockEntity panel : panels) {
+                drawBoard(pose, panel, buffers);
+            }
+
             pose.popPose();
         } finally {
             // Submit now, while the panels are still the thing being drawn.
@@ -387,6 +374,47 @@ public class PanelRemoteScreen extends Screen {
     }
 
     private ByteBufferBuilder ownPool;
+
+    /**
+     * Draws one board at its real offset.
+     *
+     * <p>Dashpanels renders the board as an ordinary block model rather than through the block entity
+     * renderer, so the screen has to draw it or the modules end up floating in nothing.
+     */
+    private void drawBoard(PoseStack pose, AbstractPanelBlockEntity panel, MultiBufferSource buffers) {
+        RenderSystem.enableDepthTest();
+        RenderSystem.depthMask(true);
+        pose.pushPose();
+        panelOffset(pose, panel.getBlockPos());
+        Minecraft.getInstance().getBlockRenderer().renderSingleBlock(
+                panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
+                panel.getModelData(), null);
+        pose.popPose();
+    }
+
+    /** Draws one panel's modules, replaying the transforms Dashpanels itself uses for them. */
+    private void drawModules(PoseStack pose, AbstractPanelBlockEntity panel, MultiBufferSource buffers,
+                             float partialTick) {
+        pose.pushPose();
+        panelOffset(pose, panel.getBlockPos());
+        pose.pushPose();
+        pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
+        panel.renderTransform(pose);
+        for (Module module : panel.getModules().values()) {
+            pose.pushPose();
+            panel.getIndividualModuleTransform().accept(module, pose);
+            pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
+                    (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
+            // Some module renderers switch depth state for their own sprites and do not put it back, so the
+            // state is asserted again for every element instead of once per frame.
+            RenderSystem.enableDepthTest();
+            RenderSystem.depthMask(true);
+            module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
+            pose.popPose();
+        }
+        pose.popPose();
+        pose.popPose();
+    }
 
     private MultiBufferSource.BufferSource ownBuffers() {
         if (ownPool == null) {
