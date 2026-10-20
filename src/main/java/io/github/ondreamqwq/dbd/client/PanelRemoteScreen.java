@@ -10,6 +10,7 @@ import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
 import io.github.ondreamqwq.dbd.net.TerminalClickPacket;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import java.lang.reflect.Method;
 import java.nio.DoubleBuffer;
 import java.util.ArrayList;
@@ -55,6 +56,7 @@ import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
 
@@ -344,6 +346,8 @@ public class PanelRemoteScreen extends Screen {
                 panelOffset(pose, pos);
                 // The board itself. Dashpanels renders it as an ordinary block model, not through the block
                 // entity renderer, so without this the screen shows modules floating in nothing.
+                RenderSystem.enableDepthTest();
+                RenderSystem.depthMask(true);
                 minecraft.getBlockRenderer().renderSingleBlock(
                         panel.getBlockState(), pose, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY,
                         panel.getModelData(), null);
@@ -356,6 +360,10 @@ public class PanelRemoteScreen extends Screen {
                     panel.getIndividualModuleTransform().accept(module, pose);
                     pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
                             (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
+                    // Some module renderers switch depth state for their own sprites and do not put it
+                    // back, so the state is asserted again for every element instead of once per frame.
+                    RenderSystem.enableDepthTest();
+                    RenderSystem.depthMask(true);
                     module.render(panel, pose, partialTick, buffers, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
                     pose.popPose();
                 }
@@ -830,9 +838,7 @@ public class PanelRemoteScreen extends Screen {
         }
         long handle = minecraft.getWindow().getWindow();
         if (holding != null) {
-            if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
-                GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
-            }
+            hideCursor(handle);
             return;
         }
         if (pinned) {
@@ -1035,6 +1041,42 @@ public class PanelRemoteScreen extends Screen {
         }
         minecraft.mouseHandler.grabMouse();
     }
+    /** Hides the pointer: the mode is only half of it, the transparent cursor image is what sticks. */
+    private static void hideCursor(long handle) {
+        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
+            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+        }
+        long cursor = invisibleCursor();
+        if (cursor != 0L) {
+            GLFW.glfwSetCursor(handle, cursor);
+        }
+    }
+    private static long invisibleCursor;
+    private static boolean invisibleCursorTried;
+
+    /**
+     * A 1x1 fully transparent cursor image.
+     *
+     * <p>Hiding the pointer through the input mode alone is a losing game in a big pack: the mode is one
+     * global value and other mods write to it on their own schedule - which is why the same code hid the
+     * pointer in a small instance and not in the large one. A custom cursor image survives that: the arrow
+     * is replaced by transparent pixels, so the pointer stays invisible whichever mode somebody else picks.
+     */
+    private static long invisibleCursor() {
+        if (invisibleCursorTried) {
+            return invisibleCursor;
+        }
+        invisibleCursorTried = true;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer pixels = stack.malloc(4);
+            GLFWImage image = GLFWImage.malloc(stack);
+            image.set(1, 1, pixels);
+            invisibleCursor = GLFW.glfwCreateCursor(image, 0, 0);
+        } catch (Throwable ignored) {
+            invisibleCursor = 0L;
+        }
+        return invisibleCursor;
+    }
     /**
      * Locks the pointer onto the module and hides it, the way turning the camera feels: the player drags
      * and the value follows, no free cursor to chase and nothing to aim at a second time.
@@ -1058,13 +1100,14 @@ public class PanelRemoteScreen extends Screen {
         }
 
         movePointerToPin(handle, minecraft);
-        GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+        hideCursor(handle);
         pinned = true;
         pinSkipDelta = true;
     }
 
     /** Gives the pointer back when the module is dropped. */
     private void unpinPointer() {
+        GLFW.glfwSetCursor(Minecraft.getInstance().getWindow().getWindow(), 0L);
         if (!pinned) {
             return;
         }
@@ -1112,9 +1155,7 @@ public class PanelRemoteScreen extends Screen {
         // Large packs reset the cursor mode on their own schedule; enforcing it here costs one GLFW call
         // per frame while a module is being held and is the difference between a hidden pointer and a
         // visible one fighting the drag.
-        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
-            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
-        }
+        hideCursor(handle);
         if (pinSkipDelta) {
             pinSkipDelta = false;
             return;
