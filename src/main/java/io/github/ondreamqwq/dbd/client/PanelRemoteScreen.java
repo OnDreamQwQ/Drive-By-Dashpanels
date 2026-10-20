@@ -236,9 +236,8 @@ public class PanelRemoteScreen extends Screen {
             }
         }
         // Layer order, bottom to top: backdrop, models, crosshair + its indicator, then our own text.
-        drawCrosshair(graphics);
-        drawHold(graphics, partialTick);
-        drawOverlay(graphics, mouseX, mouseY);
+        // The crosshair, the value indicator and the frames are drawn from ScreenEvent.Render.Post instead,
+        // because anything queued here can still be overtaken by a batch the game flushes later.
     }
 
     /**
@@ -573,7 +572,7 @@ public class PanelRemoteScreen extends Screen {
     }
 
     private void endTopPass(GuiGraphics graphics) {
-        graphics.flush();
+        flushEveryBatch(graphics);
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();
     }
@@ -581,6 +580,20 @@ public class PanelRemoteScreen extends Screen {
      * The crosshair, drawn last so it sits above the panels instead of behind them. A module that asked for
      * the crosshair to be hidden (a joystick being dragged) hides this one too, exactly like the real one.
      */
+    /**
+     * The layer that has to sit above everything else.
+     *
+     * <p>Called from {@code ScreenEvent.Render.Post}, i.e. after this screen has finished drawing and after
+     * the game has had every chance to flush the model batches. Drawing the frames and the crosshair from
+     * inside {@code render} was what kept them underneath the panels: a module may queue geometry through a
+     * render type of its own, and that batch is only submitted at the end of the frame - after our overlay.
+     */
+    public void renderTopLayer(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        drawCrosshair(graphics);
+        drawHold(graphics, partialTick);
+        drawOverlay(graphics, mouseX, mouseY);
+    }
+
     private void drawCrosshair(GuiGraphics graphics) {
         if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
             return;
@@ -1001,6 +1014,12 @@ public class PanelRemoteScreen extends Screen {
         }
 
         movePointerToPin(handle, minecraft);
+        // Large packs reset the cursor mode on their own schedule; enforcing it here costs one GLFW call
+        // per frame while a module is being held and is the difference between a hidden pointer and a
+        // visible one fighting the drag.
+        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
+            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+        }
         if (pinSkipDelta) {
             pinSkipDelta = false;
             return;
