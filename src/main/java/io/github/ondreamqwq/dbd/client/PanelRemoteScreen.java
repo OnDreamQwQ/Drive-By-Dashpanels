@@ -103,8 +103,6 @@ public class PanelRemoteScreen extends Screen {
     private static final int CROSSHAIR_SIZE = 15;
     /** Temporary diagnostic marker: a translucent tint that shows whether anything still paints over us. */
     private static final int PROBE = 0x60FF0000;
-    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
-    private static int DIAGNOSTIC_TICK;
     private static final int INFO_X = 6;
     private static final int INFO_Y = 6;
     private static final int NAME_COLOR = 0xFFFFFFFF;
@@ -355,13 +353,10 @@ public class PanelRemoteScreen extends Screen {
         }
         pose.popPose();
 
-        // endBatch() with no argument only flushes the last render type used, so every type the models
-        // can pick is drained explicitly.
-        for (RenderType type : List.of(
-                RenderType.solid(), RenderType.cutoutMipped(), RenderType.cutout(), RenderType.translucent(),
-                RenderType.lines())) {
-            buffers.endBatch(type);
-        }
+        // Every type a model might have used has to be submitted now, while the panels are being drawn.
+        // Anything left in a buffer is submitted at the end of the frame instead - after the overlay -
+        // which is exactly how the panels kept ending up painted on top of the crosshair and the frames.
+        drainBuffers(buffers);
 
         Lighting.setupFor3DItems();
         RenderSystem.disableDepthTest();
@@ -557,7 +552,34 @@ public class PanelRemoteScreen extends Screen {
      */
     private static void flushEveryBatch(GuiGraphics graphics) {
         graphics.flush();
-        MultiBufferSource.BufferSource buffers = Minecraft.getInstance().renderBuffers().bufferSource();
+        drainBuffers(Minecraft.getInstance().renderBuffers().bufferSource());
+    }
+
+    /**
+     * Submits every vertex still sitting in the shared buffer source, whatever type queued it.
+     *
+     * <p>{@code BufferSource.endBatch()} with no argument ends the <em>last</em> shared type plus every fixed
+     * buffer. Shared types share one underlying buffer, so ending one of them by hand with
+     * {@code endBatch(type)} is not a general drain: the loop below just calls the no-argument form until the
+     * started map is empty. That is what was missing - the panels' geometry stayed queued, the game submitted
+     * it at the end of the frame, and the panels were consequently painted on top of the overlay.
+     */
+    private static void drainBuffers(MultiBufferSource.BufferSource buffers) {
+        Map<?, ?> started = startedBuilders(buffers);
+        if (started == null) {
+            // Reflective lookups are not supposed to fail, but eight unconditional calls are cheap and the
+            // overlay still lands on top in most cases if the field ever moves.
+            for (int i = 0; i < 8; i++) {
+                buffers.endBatch();
+            }
+            return;
+        }
+        for (int i = 0; i < 64 && !started.isEmpty(); i++) {
+            buffers.endBatch();
+        }
+    }
+
+    private static Map<?, ?> startedBuilders(MultiBufferSource.BufferSource buffers) {
         if (!STARTED_RESOLVED) {
             STARTED_RESOLVED = true;
             try {
@@ -568,26 +590,12 @@ public class PanelRemoteScreen extends Screen {
             }
         }
         if (STARTED == null) {
-            return;
+            return null;
         }
         try {
-            Map<?, ?> started = (Map<?, ?>) STARTED.get(buffers);
-            if (started == null) {
-                return;
-            }
-            int before = started.size();
-            for (Object key : List.copyOf(started.keySet())) {
-                if (key instanceof RenderType type) {
-                    buffers.endBatch(type);
-                }
-            }
-            Object rest = STARTED.get(buffers);
-            int after = rest instanceof Map<?, ?> map ? map.size() : -1;
-            if (DIAGNOSTIC_TICK++ % 60 == 0) {
-                LOGGER.info("[dbd] top layer flush: pending before={} after={}", before, after);
-            }
+            return (Map<?, ?>) STARTED.get(buffers);
         } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // the depth clear below still helps; a missing fast path must never take the screen down
+            return null;
         }
     }
 
