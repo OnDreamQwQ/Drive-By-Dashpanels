@@ -101,6 +101,10 @@ public class PanelRemoteScreen extends Screen {
     private static boolean STARTED_RESOLVED;
 
     private static final int CROSSHAIR_SIZE = 15;
+    /** Temporary diagnostic marker: a translucent tint that shows whether anything still paints over us. */
+    private static final int PROBE = 0x60FF0000;
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+    private static int DIAGNOSTIC_TICK;
     private static final int INFO_X = 6;
     private static final int INFO_Y = 6;
     private static final int NAME_COLOR = 0xFFFFFFFF;
@@ -571,10 +575,16 @@ public class PanelRemoteScreen extends Screen {
             if (started == null) {
                 return;
             }
+            int before = started.size();
             for (Object key : List.copyOf(started.keySet())) {
                 if (key instanceof RenderType type) {
                     buffers.endBatch(type);
                 }
+            }
+            Object rest = STARTED.get(buffers);
+            int after = rest instanceof Map<?, ?> map ? map.size() : -1;
+            if (DIAGNOSTIC_TICK++ % 60 == 0) {
+                LOGGER.info("[dbd] top layer flush: pending before={} after={}", before, after);
             }
         } catch (ReflectiveOperationException | RuntimeException ignored) {
             // the depth clear below still helps; a missing fast path must never take the screen down
@@ -615,6 +625,10 @@ public class PanelRemoteScreen extends Screen {
         int x = (guiWidth - CROSSHAIR_SIZE) / 2;
         int y = (guiHeight - CROSSHAIR_SIZE) / 2;
         beginTopPass(graphics);
+        // Diagnostic: a 120x120 tint centred on the crosshair. If the panels are really painting over this
+        // layer, the tint itself gets cut along the panel edge; if it stays a clean square, nothing of the
+        // model is being drawn after us and the crosshair's broken look comes from something else.
+        graphics.fill(guiWidth / 2 - 60, guiHeight / 2 - 60, guiWidth / 2 + 60, guiHeight / 2 + 60, PROBE);
         graphics.blit(CROSSHAIR_TEXTURE, x, y, 0.0F, 0.0F, CROSSHAIR_SIZE, CROSSHAIR_SIZE, CROSSHAIR_SIZE,
                 CROSSHAIR_SIZE);
         endTopPass(graphics);
