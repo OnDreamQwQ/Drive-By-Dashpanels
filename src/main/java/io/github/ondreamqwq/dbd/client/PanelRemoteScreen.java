@@ -59,8 +59,6 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * The screen behind the panel remote: every panel the receiver is wired to, drawn together as the one
@@ -82,8 +80,6 @@ import org.slf4j.LoggerFactory;
  * interaction you get in the world, just with the panel on screen instead of in front of you.
  */
 public class PanelRemoteScreen extends Screen {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger("drive_by_dashpanels");
 
     private static final int BACKDROP = 0x8C0E1116;
     /**
@@ -175,26 +171,14 @@ public class PanelRemoteScreen extends Screen {
         List<AbstractPanelBlockEntity> found = new ArrayList<>();
         if (blockEntity instanceof PanelRemoteReceiverBlockEntity receiver) {
             for (BlockPos pos : receiver.panels()) {
-                // A wall of panels is mostly empty boards next to the ones in use. Drawing the blank ones
-                // only adds edges that cut through whatever is in front of them, so they stay out unless
-                // asked for.
-                if (level.getBlockEntity(pos) instanceof AbstractPanelBlockEntity panel
-                        && (DbdConfig.showEmptyPanels() || !panel.getModules().isEmpty())) {
+                if (level.getBlockEntity(pos) instanceof AbstractPanelBlockEntity panel) {
                     found.add(panel);
                 }
             }
         }
         panels = List.copyOf(found);
-        // Temporary: ground truth about what the remote was handed, so a panel that shows up in the wrong
-        // place can be told apart from one that is simply drawn at an angle.
-
-        for (AbstractPanelBlockEntity panel : panels) {
-            LOGGER.info("[dbd]   panel {} {} {} modules={}", panel.getBlockPos(),
-                    panel.getClass().getSimpleName(), panel.getBlockState(), panel.getModules().keySet());
-        }
         view[1] = DbdConfig.cameraTilt();
         layout();
-        LOGGER.info("[dbd] remote at {} sees {} panel(s), cell={} centre={},{},{}", receiverPos, panels.size(), cell, centreX, centreY, centreZ);
     }
 
     /**
