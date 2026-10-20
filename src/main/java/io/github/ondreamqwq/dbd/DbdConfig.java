@@ -47,6 +47,9 @@ public final class DbdConfig {
      * of the panels further back shrinking.
      */
     public static final ModConfigSpec.BooleanValue PERSPECTIVE;
+    public static final ModConfigSpec.BooleanValue SHOW_CROSSHAIR;
+    public static final ModConfigSpec.BooleanValue SHOW_CONNECTION_FRAMES;
+    public static final ModConfigSpec.DoubleValue ROTATE_SENSITIVITY;
 
     /**
      * Whether the panel remote draws the little name/reading box in its top left corner.
@@ -91,6 +94,22 @@ public final class DbdConfig {
                         "Off keeps every panel the same size; on makes the ones further back smaller.")
                 .define("perspective", false);
 
+        SHOW_CROSSHAIR = builder
+                .comment("Draw the crosshair in the panel remote.",
+                        "The remote draws its own, because the game's one ends up behind the panels; turn this off",
+                        "if you would rather have the screen clean.")
+                .define("showCrosshair", true);
+
+        SHOW_CONNECTION_FRAMES = builder
+                .comment("Outline the modules that are wired to the cable you have selected.",
+                        "Yellow means the selected cable feeds that module, grey means that module is fed by the",
+                        "same source on another channel. Off removes both, in the world and in the remote.")
+                .define("showConnectionFrames", true);
+
+        ROTATE_SENSITIVITY = builder
+                .comment("How far the assembly turns per pixel dragged in the panel remote.",
+                        "0.55 is the default; lower it if the view feels twitchy, raise it to spin it faster.")
+                .defineInRange("rotateSensitivity", 0.55D, 0.05D, 3.0D);
         SPEC = builder.build();
     }
 
@@ -109,6 +128,17 @@ public final class DbdConfig {
         return CAMERA_TILT.get().floatValue();
     }
 
+    public static boolean showCrosshair() {
+        return SHOW_CROSSHAIR.get();
+    }
+
+    public static boolean showConnectionFrames() {
+        return SHOW_CONNECTION_FRAMES.get();
+    }
+
+    public static float rotateSensitivity() {
+        return ROTATE_SENSITIVITY.get().floatValue();
+    }
     public static boolean infoBox() {
         return INFO_BOX.get();
     }

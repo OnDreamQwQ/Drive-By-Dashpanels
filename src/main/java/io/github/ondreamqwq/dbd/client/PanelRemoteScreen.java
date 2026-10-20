@@ -699,6 +699,9 @@ public class PanelRemoteScreen extends Screen {
     }
 
     private void drawCrosshair(GuiGraphics graphics) {
+        if (!DbdConfig.showCrosshair()) {
+            return;
+        }
         if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
             return;
         }
@@ -980,10 +983,10 @@ public class PanelRemoteScreen extends Screen {
             moved = true;
         }
         // Reversed on purpose: dragging the view should push the panel the way the hand moves.
-        view[0] = Mth.wrapDegrees(view[0] - (float) dragX * DRAG_SCALE);
+        view[0] = Mth.wrapDegrees(view[0] - (float) dragX * DbdConfig.rotateSensitivity());
         // No pitch limit: a ceiling panel sits above the module plane, so its modules only come into view
         // once the view is turned well past the horizon and over the top.
-        view[1] -= (float) dragY * DRAG_SCALE;
+        view[1] -= (float) dragY * DbdConfig.rotateSensitivity();
         return true;
     }
 

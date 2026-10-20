@@ -1,5 +1,7 @@
 package io.github.ondreamqwq.dbd.client;
 
+import io.github.ondreamqwq.dbd.DbdConfig;
+
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -128,6 +130,9 @@ public final class WireSelection {
      * so a cable picked up elsewhere never lights up unrelated modules.
      */
     public static int frameColor(AbstractPanelBlockEntity panel, Module module) {
+        if (!DbdConfig.showConnectionFrames()) {
+            return 0;
+        }
         // Checked before the binding lookup: this runs once per module per frame, and with no cable
         // in hand (the normal case) the answer is "draw nothing" without touching the table at all.
         BlockPos source = source();
