@@ -599,8 +599,13 @@ public class PanelRemoteScreen extends Screen {
      * render type of its own, and that batch is only submitted at the end of the frame - after our overlay.
      */
     public void renderTopLayer(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        drawCrosshair(graphics);
+        // Order matters here, and not for the depth reason it looks like. A hold's indicator - the lever,
+        // the knob dial - is drawn with an inverted blend (ONE_MINUS_DST_COLOR against
+        // ONE_MINUS_SRC_COLOR), so every pixel already on screen underneath it gets flipped: a crosshair
+        // drawn first comes out half dark and half bright and reads as if the panel were lying on top of
+        // it. Drawing the crosshair after the indicator keeps all of it ours.
         drawHold(graphics, partialTick);
+        drawCrosshair(graphics);
         drawOverlay(graphics, mouseX, mouseY);
     }
 
