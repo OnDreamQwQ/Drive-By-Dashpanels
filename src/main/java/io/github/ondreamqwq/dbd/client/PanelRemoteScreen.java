@@ -636,6 +636,15 @@ public class PanelRemoteScreen extends Screen {
                 return;
             }
             if (started.isEmpty()) {
+                // Nothing shared is queued - but the block sheets are fixed buffers of this source, they are
+                // not in startedBuilders at all, and only the no-argument endBatch walks them. Dashpanels'
+                // PreLoadedModel writes straight into renderBuffers().bufferSource() and ignores the source it
+                // is handed, so every module of every module lands in exactly those fixed buffers. They used
+                // to be submitted at the end of the frame, after our boards and with depth testing already
+                // switched off - which is why every module painted over the panel it is mounted on.
+                for (int n = 0; n < 4; n++) {
+                    buffers.endBatch();
+                }
                 return;
             }
             Object next = started.keySet().iterator().next();
