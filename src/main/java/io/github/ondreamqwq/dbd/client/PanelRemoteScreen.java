@@ -556,24 +556,31 @@ public class PanelRemoteScreen extends Screen {
     /**
      * Submits every vertex still sitting in the shared buffer source, whatever type queued it.
      *
-     * <p>{@code BufferSource.endBatch()} with no argument ends the <em>last</em> shared type plus every fixed
-     * buffer. Shared types share one underlying buffer, so ending one of them by hand with
-     * {@code endBatch(type)} is not a general drain: the loop below just calls the no-argument form until the
-     * started map is empty. That is what was missing - the panels' geometry stayed queued, the game submitted
-     * it at the end of the frame, and the panels were consequently painted on top of the overlay.
+     * <p>The no-argument {@code endBatch()} is <em>not</em> a drain: it ends {@code lastSharedType} plus the
+     * fixed buffers, and {@code endLastBatch()} does nothing once {@code lastSharedType} is null - which it is
+     * after any earlier {@code GuiGraphics.flush()}. Calling it in a loop therefore spins while the builders
+     * stay queued, they get submitted at the end of the frame, and the panels end up painted over the overlay.
+     *
+     * <p>{@code endBatch(type)} is the one that actually removes a builder and draws it. Only one shared type
+     * can be pending at a time - {@code getBuffer} ends the previous one when the type changes - so ending the
+     * pending types one at a time cannot corrupt the shared buffer.
      */
     private static void drainBuffers(MultiBufferSource.BufferSource buffers) {
-        Map<?, ?> started = startedBuilders(buffers);
-        if (started == null) {
-            // Reflective lookups are not supposed to fail, but eight unconditional calls are cheap and the
-            // overlay still lands on top in most cases if the field ever moves.
-            for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 64; i++) {
+            Map<?, ?> started = startedBuilders(buffers);
+            if (started == null) {
+                // Reflection failed; the panels still get drawn, just later than we would like.
                 buffers.endBatch();
+                return;
             }
-            return;
-        }
-        for (int i = 0; i < 64 && !started.isEmpty(); i++) {
-            buffers.endBatch();
+            if (started.isEmpty()) {
+                return;
+            }
+            Object next = started.keySet().iterator().next();
+            if (!(next instanceof RenderType type)) {
+                return;
+            }
+            buffers.endBatch(type);
         }
     }
 
