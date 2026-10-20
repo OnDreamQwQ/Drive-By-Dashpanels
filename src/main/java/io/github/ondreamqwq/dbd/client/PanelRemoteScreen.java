@@ -327,6 +327,12 @@ public class PanelRemoteScreen extends Screen {
         }
 
         RenderSystem.enableDepthTest();
+        // The GUI pass runs with depth writes off, so nothing the panels draw would ever be recorded in the
+        // depth buffer and a module drawn later simply painted over a board drawn earlier - the assembly
+        // looked like the modules were floating in front of it. Writes are turned on here, for the panels
+        // only, and the buffer is cleared first so the world behind the screen does not interfere.
+        RenderSystem.depthMask(true);
+        RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
         Lighting.setupForFlatItems();
 
         try {
@@ -365,6 +371,7 @@ public class PanelRemoteScreen extends Screen {
         drainBuffers(Minecraft.getInstance().renderBuffers().bufferSource());
 
         Lighting.setupFor3DItems();
+        RenderSystem.depthMask(false);
         RenderSystem.disableDepthTest();
         if (savedProjection != null) {
             RenderSystem.setProjectionMatrix(savedProjection, savedSorting);
