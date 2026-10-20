@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
+import com.mojang.logging.LogUtils;
 import com.mojang.math.Axis;
 import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
@@ -56,6 +57,7 @@ import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
+import org.slf4j.Logger;
 
 /**
  * The screen behind the panel remote: every panel the receiver is wired to, drawn together as the one
@@ -79,7 +81,18 @@ import org.lwjgl.system.MemoryStack;
 public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0x8C0E1116;
-    private static final ResourceLocation CROSSHAIR = ResourceLocation.withDefaultNamespace("hud/crosshair");
+    private static final Logger LOGGER = LogUtils.getLogger();
+    /**
+     * The crosshair is drawn from its texture rather than through the GUI sprite manager.
+     *
+     * <p>{@code GuiGraphics.blitSprite} looks the sprite up in {@code GuiSpriteManager}, and from
+     * {@code ScreenEvent.Render.Post} that lookup produced nothing here while plain fills and text in the very
+     * same callback drew fine - so the sprite is what fails, not the layer. Blitting the PNG directly goes
+     * through {@code RenderType.guiTextured(texture)} instead, which is a path we know works from this layer.
+     * Resource packs still apply: the path is resolved by the texture manager, not baked into the jar.
+     */
+    private static final ResourceLocation CROSSHAIR_TEXTURE =
+            ResourceLocation.withDefaultNamespace("textures/gui/sprites/hud/crosshair.png");
     private boolean pinned;
     private boolean pinSkipDelta;
     private double pinX;
@@ -598,10 +611,17 @@ public class PanelRemoteScreen extends Screen {
         if (holding != null && holding.getGuiContext() != null && !holding.getGuiContext().crosshairVisibility) {
             return;
         }
+        // Vanilla draws it at these exact coordinates, taken from the graphics rather than from the screen:
+        // Screen.width/height are only valid once init() ran, and this layer runs without that guarantee.
+        int guiWidth = graphics.guiWidth();
+        int guiHeight = graphics.guiHeight();
+        int x = (guiWidth - CROSSHAIR_SIZE) / 2;
+        int y = (guiHeight - CROSSHAIR_SIZE) / 2;
         beginTopPass(graphics);
-        graphics.blitSprite(CROSSHAIR, (width - CROSSHAIR_SIZE) / 2, (height - CROSSHAIR_SIZE) / 2,
-                CROSSHAIR_SIZE, CROSSHAIR_SIZE);
+        graphics.blit(CROSSHAIR_TEXTURE, x, y, 0.0F, 0.0F, CROSSHAIR_SIZE, CROSSHAIR_SIZE, CROSSHAIR_SIZE,
+                CROSSHAIR_SIZE);
         endTopPass(graphics);
+        LOGGER.info("crosshair blitted at ({}, {}) on a {}x{} graphics", x, y, guiWidth, guiHeight);
     }
     /**
      * Name, a live reading and how the module is being driven, drawn by us right above the module.
