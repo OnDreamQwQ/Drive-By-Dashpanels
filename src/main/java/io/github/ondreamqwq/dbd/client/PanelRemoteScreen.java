@@ -97,11 +97,6 @@ public class PanelRemoteScreen extends Screen {
     private static final int HINT_COLOR = 0xFFB0B0B0;
     private static final int HOLD_COLOR = 0xFFFFC400;
     private static final int HIGHLIGHT = 0xFFFFC400;
-    /** How far the wired frame is pushed out, as a fraction of the module box. */
-    private static final float FRAME_INFLATE = 1.02F;
-
-    private static final float FRAME_LINE_WIDTH = 2.5F;
-
     private static final int INFO_BACKDROP = 0xD8101014;
     private static final int INFO_EDGE = 0xFF585858;
     private static final int VALUE_COLOR = 0xFF7FE0A0;
@@ -594,74 +589,9 @@ public class PanelRemoteScreen extends Screen {
      * render type of its own, and that batch is only submitted at the end of the frame - after our overlay.
      */
     public void renderTopLayer(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // The frames are drawn here rather than inside the panel renderer for the same reason as the
-        // crosshair: inside the model pass a later module can paint over them.
-        Matrix4f projected = perspectiveProjection();
-        Matrix4f savedProjection = null;
-        VertexSorting savedSorting = null;
-        if (projected != null) {
-            savedProjection = RenderSystem.getProjectionMatrix();
-            savedSorting = RenderSystem.getVertexSorting();
-            RenderSystem.setProjectionMatrix(projected, VertexSorting.DISTANCE_TO_ORIGIN);
-        }
-        drawWiredFrames(graphics, partialTick);
-        if (savedProjection != null) {
-            RenderSystem.setProjectionMatrix(savedProjection, savedSorting);
-        }
         drawCrosshair(graphics);
         drawHold(graphics, partialTick);
         drawOverlay(graphics, mouseX, mouseY);
-    }
-
-    /**
-     * The yellow and grey frames around every module that is wired to the selected cable source.
-     *
-     * <p>Same transform chain the panel renderer uses, rebuilt here so the outline can be submitted after
-     * the models instead of between them.
-     */
-    private void drawWiredFrames(GuiGraphics graphics, float partialTick) {
-        MultiBufferSource.BufferSource buffers = Minecraft.getInstance().renderBuffers().bufferSource();
-        beginTopPass(graphics);
-        RenderSystem.lineWidth(FRAME_LINE_WIDTH);
-        try {
-            for (AbstractPanelBlockEntity panel : panels) {
-                PoseStack pose = new PoseStack();
-                pose.pushPose();
-                assemblyPose(pose);
-                panelOffset(pose, panel.getBlockPos());
-                pose.pushPose();
-                pose.rotateAround(Axis.YP.rotationDegrees(moduleYaw(panel)), 0.5F, 0.0F, 0.5F);
-                panel.renderTransform(pose);
-                for (Module module : panel.getModules().values()) {
-                    int color = WireSelection.frameColor(panel, module);
-                    if (color == 0) {
-                        continue;
-                    }
-                    pose.pushPose();
-                    panel.getIndividualModuleTransform().accept(module, pose);
-                    pose.rotateAround(Axis.YP.rotationDegrees(180.0F),
-                            (float) module.getSize().x / 32.0F, 0.0F, (float) module.getSize().y / 32.0F);
-                    AABB bounds = module.getVoxelShape().bounds();
-                    double cx = (bounds.minX + bounds.maxX) / 2.0D;
-                    double cy = (bounds.minY + bounds.maxY) / 2.0D;
-                    double cz = (bounds.minZ + bounds.maxZ) / 2.0D;
-                    pose.pushPose();
-                    pose.translate(cx, cy, cz);
-                    pose.scale(FRAME_INFLATE, FRAME_INFLATE, FRAME_INFLATE);
-                    pose.translate(-cx, -cy, -cz);
-                    module.renderOutline(pose, buffers, partialTick, color);
-                    pose.popPose();
-                    pose.popPose();
-                }
-                pose.popPose();
-                pose.popPose();
-            }
-        } catch (RuntimeException | LinkageError ignored) {
-            // decoration: a broken outline must never take the screen down
-        } finally {
-            RenderSystem.lineWidth(1.0F);
-        }
-        endTopPass(graphics);
     }
 
     private void drawCrosshair(GuiGraphics graphics) {
@@ -669,16 +599,8 @@ public class PanelRemoteScreen extends Screen {
             return;
         }
         beginTopPass(graphics);
-        // Two plain rectangles instead of the hud/crosshair sprite: the sprite blit goes through the gui
-        // atlas and can come out empty when the atlas is not the one the screen expects, while fill() lands
-        // in the fixed GUI buffer that is flushed unconditionally.
-        int half = CROSSHAIR_SIZE / 2;
-        int centerX = width / 2;
-        int centerY = height / 2;
-        graphics.fill(centerX - 1, centerY - half - 1, centerX + 2, centerY + half + 1, 0xC0000000);
-        graphics.fill(centerX - half - 1, centerY - 1, centerX + half + 1, centerY + 2, 0xC0000000);
-        graphics.fill(centerX, centerY - half, centerX + 1, centerY + half, 0xFFFFFFFF);
-        graphics.fill(centerX - half, centerY, centerX + half, centerY + 1, 0xFFFFFFFF);
+        graphics.blitSprite(CROSSHAIR, (width - CROSSHAIR_SIZE) / 2, (height - CROSSHAIR_SIZE) / 2,
+                CROSSHAIR_SIZE, CROSSHAIR_SIZE);
         endTopPass(graphics);
     }
     /**
