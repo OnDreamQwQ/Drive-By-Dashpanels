@@ -4,7 +4,6 @@ import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
-import com.mojang.logging.LogUtils;
 import com.mojang.math.Axis;
 import io.github.ondreamqwq.dbd.DbdConfig;
 import io.github.ondreamqwq.dbd.content.PanelRemoteReceiverBlockEntity;
@@ -57,7 +56,6 @@ import org.joml.Vector4f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
-import org.slf4j.Logger;
 
 /**
  * The screen behind the panel remote: every panel the receiver is wired to, drawn together as the one
@@ -81,7 +79,6 @@ import org.slf4j.Logger;
 public class PanelRemoteScreen extends Screen {
 
     private static final int BACKDROP = 0x8C0E1116;
-    private static final Logger LOGGER = LogUtils.getLogger();
     /**
      * The crosshair is drawn from its texture rather than through the GUI sprite manager.
      *
@@ -621,7 +618,6 @@ public class PanelRemoteScreen extends Screen {
         graphics.blit(CROSSHAIR_TEXTURE, x, y, 0.0F, 0.0F, CROSSHAIR_SIZE, CROSSHAIR_SIZE, CROSSHAIR_SIZE,
                 CROSSHAIR_SIZE);
         endTopPass(graphics);
-        LOGGER.info("crosshair blitted at ({}, {}) on a {}x{} graphics", x, y, guiWidth, guiHeight);
     }
     /**
      * Name, a live reading and how the module is being driven, drawn by us right above the module.
