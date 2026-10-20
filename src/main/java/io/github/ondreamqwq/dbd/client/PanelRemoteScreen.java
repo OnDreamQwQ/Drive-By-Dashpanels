@@ -812,6 +812,36 @@ public class PanelRemoteScreen extends Screen {
         if (active != null) {
             active.tick();
         }
+        enforceCursor();
+    }
+
+    /**
+     * Re-asserts the pointer state.
+     *
+     * <p>In a large pack the cursor mode is shared, and other mods write to it on their own schedule - the
+     * tested instance hides the pointer fine, while the big pack shows it again while a module is held.
+     * Doing this from the render tail, from the HUD tail and once per tick means whichever of them runs
+     * last in a given frame still ends up with the state this screen wants.
+     */
+    public void enforceCursor() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.screen != this) {
+            return;
+        }
+        long handle = minecraft.getWindow().getWindow();
+        if (holding != null) {
+            if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_HIDDEN) {
+                GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
+            }
+            return;
+        }
+        if (pinned) {
+            unpinPointer();
+        }
+        if (GLFW.glfwGetInputMode(handle, GLFW.GLFW_CURSOR) != GLFW.GLFW_CURSOR_NORMAL) {
+            minecraft.mouseHandler.releaseMouse();
+            GLFW.glfwSetInputMode(handle, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
+        }
     }
 
     private static ModuleHoldInteraction<?> activeHold() {
