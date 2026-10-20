@@ -47,6 +47,7 @@ public final class DbdConfig {
      * of the panels further back shrinking.
      */
     public static final ModConfigSpec.BooleanValue PERSPECTIVE;
+    public static final ModConfigSpec.BooleanValue SHOW_EMPTY_PANELS;
 
     /**
      * Whether the panel remote draws the little name/reading box in its top left corner.
@@ -91,6 +92,11 @@ public final class DbdConfig {
                         "Off keeps every panel the same size; on makes the ones further back smaller.")
                 .define("perspective", false);
 
+        SHOW_EMPTY_PANELS = builder
+                .comment("Show panels that hold no modules in the panel remote.",
+                        "A wall of panels usually contains empty ones next to the ones in use; with this off",
+                        "only the boards that actually carry something are drawn, which keeps the remote readable.")
+                .define("showEmptyPanels", false);
         SPEC = builder.build();
     }
 
@@ -111,6 +117,10 @@ public final class DbdConfig {
 
     public static boolean infoBox() {
         return INFO_BOX.get();
+    }
+
+    public static boolean showEmptyPanels() {
+        return SHOW_EMPTY_PANELS.get();
     }
 
     public static boolean perspective() {
